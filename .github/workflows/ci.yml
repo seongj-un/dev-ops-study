@@ -41,6 +41,10 @@ jobs:
       # Dependabot이 SHA와 주석을 함께 올려 준다 (dependabot.yml 참고).
       - name: 소스 체크아웃
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 체크아웃에 쓴 토큰을 러너에 남기지 않는다. 이 워크플로는 git push 같은 인증된 git 작업을 하지 않으므로,
+          # 남겨 두면 뒤따르는 단계(서드파티 액션, 빌드 스크립트)가 그 토큰을 읽어 갈 수 있는 여지만 생긴다.
+          persist-credentials: false
 
       # 빌드가 요구하는 JDK 25(toolchain)를 JAVA_HOME으로 잡는다. Gradle은 JAVA_HOME 같은 로컬 JDK를 먼저 탐지하고, 요구에 맞는 JDK를
       # 못 찾을 때만 자동으로 내려받는다 (settings.gradle.kts의 foojay 리졸버). 그래서 미리 잡아 두면 다운로드 없이 그 JDK를 쓴다.
@@ -90,6 +94,8 @@ jobs:
     steps:
       - name: 소스 체크아웃
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # test 잡과 같은 이유
 
       # gha 캐시 백엔드는 기본 docker 드라이버로는 쓸 수 없다(containerd 이미지 스토어를 켠 경우만 예외).
       # 이 액션이 BuildKit 컨테이너를 쓰는 docker-container 드라이버 빌더를 만들어 준다.
