@@ -1,4 +1,5 @@
 # CI: PR과 main 푸시마다 테스트 -> 이미지 빌드(amd64, arm64) -> 취약점 스캔을 돌리고, main 푸시일 때만 GHCR에 멀티 아키텍처 이미지를 올린다.
+# 이미지를 올린 뒤에는 deploy-dev 잡이 설정 저장소(GitOps)의 dev 이미지 태그를 그 커밋 SHA로 바꿔 커밋한다. 클러스터에 배포하는 일은 CI가 아니라 클러스터 안의 Argo CD가 한다.
 #
 # 잡 표시 이름(test, image)은 브랜치 룰셋이 필수 상태 검사로 지정한 이름이라 바꾸면 안 된다.
 # 같은 이유로 paths 필터도 두지 않는다. 필터로 워크플로가 건너뛰어지면 그 검사는 "Pending"으로 남고,
@@ -42,7 +43,7 @@ jobs:
       - name: 소스 체크아웃
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # 체크아웃에 쓴 토큰을 러너에 남기지 않는다. 이 워크플로는 git push 같은 인증된 git 작업을 하지 않으므로,
+          # 체크아웃에 쓴 토큰을 러너에 남기지 않는다. 이 잡은 git push 같은 인증된 git 작업을 하지 않으므로(푸시하는 deploy-dev 잡만 예외다),
           # 남겨 두면 뒤따르는 단계(서드파티 액션, 빌드 스크립트)가 그 토큰을 읽어 갈 수 있는 여지만 생긴다.
           persist-credentials: false
 
@@ -348,4 +349,165 @@ jobs:
             else
               echo '- 푸시: 안 함 (PR이거나 앞 단계가 실패했다)'
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 설정 저장소(GitOps)에 "dev에는 이 이미지를 띄운다"는 원하는 상태를 기록하는 잡이다.
+  #
+  # GitOps에서 CI는 클러스터에 접속하지 않는다. 클러스터 자격 증명(kubeconfig)도 CI에 두지 않는다.
+  # CI가 하는 일은 이미지를 만들어 GHCR에 올리는 것(위 image 잡)과, 설정 저장소의 dev 값 파일에서 image.tag를 그 이미지의 SHA로 바꿔 커밋하는 것(이 잡)까지다.
+  # 실제 배포는 클러스터 안에서 도는 Argo CD가 한다. 설정 저장소를 주기적으로 읽어서 클러스터의 실제 상태를 Git에 적힌 상태에 맞춘다(클러스터가 밖에서 가져오는 pull 방식이다).
+  # 그래서 "dev에 지금 뭐가 떠 있어야 하나"의 답이 Git 이력(누가, 언제, 어느 앱 커밋으로)에 남고, 되돌리기는 그 설정 커밋을 git revert하는 것이다.
+  # 이 상태를 앱 저장소가 아니라 별도 저장소에 두는 이유: 이 저장소의 main은 PR과 필수 검사로 보호돼서 CI가 직접 커밋을 얹기 어렵고,
+  # 앱 코드 이력에 배포 커밋이 섞이지 않으며, CI에 주는 쓰기 권한을 설정 저장소 하나로 한정할 수 있다.
+  #
+  # image 잡에 합치지 않고 잡을 나눈 이유: 설정 저장소에 쓰는 배포 키가 서드파티 액션(Buildx, Trivy 등)과 이미지 빌드가 도는 러너에 있으면 안 되기 때문이다.
+  # 잡마다 러너가 따로라서, 이 키는 이 잡의 러너에만 전달되고 image 잡의 러너에는 가지 않는다. 반대로 image 잡의 packages: write 같은 권한도 이 잡에는 없다.
+  deploy-dev:
+    name: deploy-dev
+    # image 잡이 성공해야 돈다. 테스트와 취약점 스캔 게이트를 통과해 GHCR에 올라간 이미지만 배포 상태에 기록된다.
+    needs: image
+    # image 잡이 이미지를 올리는 조건과 같다. PR 실행에서는 올라간 이미지가 없으니 기록할 상태도 없다.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # 이 잡이 설정 저장소에 쓰는 힘은 GITHUB_TOKEN이 아니라 아래 배포 키에서 나온다. GITHUB_TOKEN은 이 앱 저장소에서만 유효한데 이 잡은 앱 저장소에 쓰지 않으므로 읽기만 둔다.
+    # (잡 단위 permissions는 워크플로 단위 값을 통째로 대체하므로 contents: read를 다시 적는다.)
+    permissions:
+      contents: read
+    # 설정 저장소의 main에는 한 번에 한 잡만 쓴다. 같은 저장소에서 같은 그룹 이름을 쓰는 잡은 동시에 하나만 돈다. 이 그룹은 ref가 아니라 "설정 저장소에 쓰기"를 가리키는 이름이라,
+    # 나중에 워크플로 단위 concurrency(위)가 바뀌거나 다른 워크플로가 이 이름을 함께 쓰더라도 직렬화가 유지된다 (지금은 워크플로 단위 그룹도 main의 실행을 이미 하나씩만 돌린다).
+    # cancel-in-progress: false: 진행 중인 잡은 끊지 않는다. 푸시 도중에 끊기면 로그만으로는 커밋이 원격에 반영됐는지 알 수 없다.
+    # 대기 중인 잡은 더 새 잡이 오면 GitHub가 대체한다. 이 잡은 "지금 원하는 태그" 하나를 덮어쓰는 일이라 옛 SHA를 건너뛰고 최신 SHA로 갱신해도 되고, 이력은 Git 커밋으로 남는다.
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    env:
+      # 설정 저장소와, 그 안에서 CI가 고치는 파일 (설정 저장소의 디렉터리 구조와 짝이다: environments/<환경>/values.yaml)
+      CONFIG_REPO: seongj-un/dev-ops-study-config
+      VALUES_FILE: environments/dev/values.yaml
+      # image 잡이 푸시한 이미지의 태그와 같은 값이다: 이 푸시 커밋의 전체 SHA(40자). 배포 상태가 소스 커밋과 1:1로 이어진다.
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      # 시크릿 CONFIG_REPO_DEPLOY_KEY가 비어 있으면(아직 등록 전이거나 이름을 잘못 적으면) actions/checkout은 에러 없이 SSH 대신 이 워크플로의 GITHUB_TOKEN을 쓰는 HTTPS 방식으로 바뀐다.
+      # 설정 저장소가 공개라 클론은 성공하고, 푸시 단계에서야 권한 오류(403)로 실패한다. 원인을 찾기 어려우므로 체크아웃 전에 먼저 확인한다.
+      # 시크릿 값은 셸에 넘기지 않는다. `secrets.X != ''`는 러너가 계산해서 true/false만 환경 변수로 들어간다.
+      - name: 배포 키 시크릿 확인
+        env:
+          HAS_DEPLOY_KEY: ${{ secrets.CONFIG_REPO_DEPLOY_KEY != '' }}
+        run: |
+          if [ "$HAS_DEPLOY_KEY" != 'true' ]; then
+            echo '::error::시크릿 CONFIG_REPO_DEPLOY_KEY가 비어 있다. 설정 저장소에 쓰기 권한으로 등록한 배포 키의 비공개 키를 이 저장소의 Actions 시크릿으로 등록한다.'
+            exit 1
+          fi
+
+      # 이 잡이 체크아웃하는 것은 앱 저장소가 아니라 설정 저장소다. 앱 소스는 필요 없다(이미지는 image 잡이 이미 만들었다).
+      - name: 설정 저장소 체크아웃
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.CONFIG_REPO }}
+          # 푸시할 브랜치를 명시한다. 생략하면 설정 저장소의 기본 브랜치를 알아내서(SSH일 때는 git ls-remote로) 받는다.
+          ref: main
+          # 설정 저장소에 쓰려면 GITHUB_TOKEN으로는 안 된다. GITHUB_TOKEN은 워크플로가 도는 저장소(이 앱 저장소)에서만 유효하다.
+          # 그래서 설정 저장소의 배포 키(deploy key)를 쓴다. SSH 키 한 쌍에서 공개 키는 설정 저장소에 "쓰기 허용"으로 등록하고, 비공개 키는 이 저장소의 시크릿에 둔다.
+          # 배포 키는 등록한 저장소 하나에서만 통한다 (GitHub는 같은 공개 키를 다른 저장소나 계정에 다시 등록하지 못하게 막는다).
+          # 그래서 이 키가 새어도 열리는 것은 설정 저장소뿐이고, 이 앱 저장소나 계정의 다른 저장소에는 아무 힘이 없다.
+          ssh-key: ${{ secrets.CONFIG_REPO_DEPLOY_KEY }}
+          # 다른 잡(test, image)은 persist-credentials: false로 자격을 러너에 남기지 않는다. 이 잡은 남겨야 한다. 뒤 단계에서 git pull과 git push를 하기 때문이다.
+          # true(기본값이지만 일부러 적었다)이면 체크아웃이 끝난 뒤에도 $RUNNER_TEMP의 SSH 키 파일과, 그 경로를 적은 저장소의 git 설정(core.sshCommand)이 남는다.
+          # 그래서 뒤 단계의 git 명령이 같은 키로 인증된다. false이면 체크아웃이 끝나는 즉시 둘 다 지워서 뒤 단계의 git push가 인증 오류로 실패한다.
+          # 남긴 키 파일과 설정은 잡이 끝날 때 액션의 post 단계가 지운다. 이 잡에는 서드파티 액션이 없다.
+          # 키가 있는 러너에서 도는 코드는 GitHub의 체크아웃 액션, 러너에 설치된 git·yq, 이 파일의 셸 스크립트뿐이다.
+          persist-credentials: true
+
+      # dev 값 파일의 image.tag를 이 커밋의 SHA로 바꾼다.
+      # yq(mikefarah, v4)는 ubuntu-24.04 러너 이미지에 설치돼 있어서 별도 액션 없이 쓴다. 배포 키가 있는 잡에 서드파티 액션을 더하지 않는 효과도 있다.
+      # 값은 식에 이어 붙이지 않고 환경 변수로 넘겨 strenv()로 읽는다. 셸 인용 문제가 없고 값이 항상 문자열로 쓰인다.
+      # SHA가 (극히 드물게) 숫자나 지수 표기로만 보이는 모양이어도 yq가 따옴표를 붙여 문자열로 남기므로, 차트가 요구하는 문자열 40자 16진수가 유지된다.
+      #
+      # yq는 없는 키를 에러 없이 새로 만든다. 값 파일의 구조가 바뀌어 image.tag가 없는데도 잡이 초록색으로 끝나고 dev만 갱신되지 않는 일을 막으려고 먼저 값을 읽는다.
+      # (-e: 키가 없거나 null이면 종료 코드 1로 실패한다.)
+      # 이미 같은 태그면 파일을 건드리지 않고 끝낸다. 같은 커밋의 잡을 다시 돌려도 빈 커밋이나 서식만 바뀐 커밋이 생기지 않는다.
+      #
+      # yq는 파일을 다시 쓴다. 주석은 그대로 두지만 빈 줄을 없애고, 들여쓰기와 줄 끝 주석 앞의 공백을 yq 방식으로 맞춘다.
+      # 값 파일이 아직 yq가 쓴 모양이 아니면 첫 커밋에만 서식 변경이 함께 들어가고, 그 뒤로는 태그 한 줄만 바뀐다.
+      - name: dev 이미지 태그 갱신 (yq)
+        id: bump
+        run: |
+          set -euo pipefail
+
+          if ! current=$(yq -e '.image.tag' "$VALUES_FILE"); then
+            echo "::error::${VALUES_FILE}에서 image.tag를 읽지 못했다 (파일이 없거나, YAML이 깨졌거나, 키가 없다). 설정 저장소의 값 파일 구조를 확인한다."
+            exit 1
+          fi
+
+          if [ "$current" = "$IMAGE_TAG" ]; then
+            echo "dev의 image.tag가 이미 ${IMAGE_TAG}라 커밋하지 않는다."
+            {
+              echo '### dev 배포 상태 기록'
+              echo
+              echo "- 변경 없음: \`${VALUES_FILE}\`의 image.tag가 이미 \`${IMAGE_TAG}\`다."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          yq -i '.image.tag = strenv(IMAGE_TAG)' "$VALUES_FILE"
+          git --no-pager diff
+          {
+            echo '### dev 배포 상태 기록'
+            echo
+            echo "- dev 이미지 태그: \`${current}\` → \`${IMAGE_TAG}\` (\`${VALUES_FILE}\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
+      # 봇 이름으로 커밋해서 푸시한다. 이 커밋이 "dev에 이 SHA를 띄운다"는 원하는 상태의 기록이고, Argo CD가 이 커밋을 가져가 클러스터에 반영한다.
+      # 설정 저장소의 main은 PR을 요구하는 룰셋으로 보호되는데 이 배포 키가 룰셋의 우회(bypass) 대상이라, PR 없이 바로 푸시할 수 있다. prod는 사람이 PR로 바꾼다.
+      # 우회는 룰셋 전체를 건너뛰는 것이라 키 자체는 main의 어느 파일이든 PR 없이 바꿀 수 있다(prod 값 파일도). dev 값 파일의 태그 한 줄만 바꾸는 것은 이 스크립트가 지키는 약속이다.
+      #
+      # 푸시가 거절될 수 있다. 설정 저장소에는 CI 말고 사람도 쓴다(PR 머지: 차트 수정, prod 승격 등). 우리가 체크아웃한 뒤에 그쪽 main이 앞서 나가면
+      # 우리 커밋은 원격 main 위에 있지 않아서(non-fast-forward), git이 남의 커밋을 덮어쓰지 않으려고 푸시를 막는다.
+      # 그래서 원격 main을 받아(git pull --rebase) 우리 커밋을 그 위로 다시 얹은 뒤 푸시한다. 최대 3번 시도한다.
+      # 두 커밋이 같은 줄(image.tag)을 바꿔서 rebase가 충돌하면 자동으로 풀지 않고 잡을 실패시킨다.
+      # 이 잡끼리는 concurrency로 직렬화돼 서로를 거절시키지 않는다. 이 재시도는 사람의 푸시와 겹칠 때를 위한 것이다.
+      #
+      # 푸시가 끝나면 그 설정 저장소 커밋의 링크를 실행 요약에 남긴다.
+      - name: 커밋하고 푸시 (거절되면 rebase 후 재시도)
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          APP_COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git add -- "$VALUES_FILE"
+          git commit --quiet \
+            -m "deploy(dev): shortener ${IMAGE_TAG::7}" \
+            -m "앱 커밋: ${APP_COMMIT_URL}
+          CI 실행: ${RUN_URL}"
+          git --no-pager show --stat --format=fuller HEAD
+
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo '::error::푸시가 3번 모두 실패했다. 위 git 출력의 사유를 확인한다 (룰셋 위반이면 배포 키가 우회 대상인지, 인증 오류면 키에 쓰기 권한이 있는지).'
+              exit 1
+            fi
+            echo "::warning::푸시가 실패했다 (시도 ${attempt}/3). 원격 main이 앞서 나갔을 수 있으니 받아서 그 위로 커밋을 다시 얹고 재시도한다."
+            git pull --rebase origin main
+          done
+
+          commit_sha=$(git rev-parse HEAD)
+          commit_url="${GITHUB_SERVER_URL}/${CONFIG_REPO}/commit/${commit_sha}"
+          echo "설정 저장소 커밋: ${commit_url}"
+          {
+            echo "- 설정 저장소 커밋: [\`${commit_sha::7}\`](${commit_url})"
+            if [ "$attempt" -gt 1 ]; then
+              echo "- 푸시는 ${attempt}번째 시도에 성공했다 (원격 main이 앞서 있어 rebase 후 재시도했다)."
+            fi
+            echo '- 클러스터의 Argo CD가 설정 저장소를 읽어 이 커밋을 반영한다. CI는 클러스터에 접속하지 않는다.'
           } >> "$GITHUB_STEP_SUMMARY"
