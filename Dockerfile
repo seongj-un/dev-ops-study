@@ -11,7 +11,7 @@
 # digest는 이미지 내용의 해시라서 바뀌지 않는다. 그래서 언제 어디서 빌드해도 같은 베이스가 나오고, 누가 태그를 다른 이미지로 바꿔치기해도 빌드에 영향이 없다.
 # digest가 있으면 Docker는 태그를 무시하고 digest로만 이미지를 찾는다. 태그는 사람이 읽으라고 남긴 표시일 뿐이라 새 버전으로 옮길 때는 둘을 함께 바꿔야 한다(Dependabot이 PR로 함께 올려 준다).
 # 이 digest는 아키텍처별 이미지가 아니라 멀티 아키텍처 이미지 인덱스의 것이라서, arm64(맥)와 amd64(CI 러너) 어디서나 같은 줄로 통한다.
-FROM eclipse-temurin:25.0.4.1_1-jdk-noble@sha256:f6366ccac38ceae180280ad7012d18a15e8031548a430dc2bae06631d9e88ed0 AS build
+FROM eclipse-temurin:26.0.2_10-jdk-noble@sha256:abe71c9b7140affd9a80d6ed313c428e3393d4d18c235823b1745670d4702053 AS build
 
 WORKDIR /app
 
@@ -47,7 +47,7 @@ RUN java -Djarmode=tools -jar build/libs/app.jar extract --layers --destination 
 
 # ---------- 2) 실행 스테이지 ----------
 # 실행에는 JRE만 있으면 된다. JRE 이미지에는 javac, jar 같은 개발 도구가 없어서 JDK 이미지보다 작고 공격 표면도 작다. 고정 방식(태그@digest)은 위와 같다.
-FROM eclipse-temurin:25.0.4.1_1-jre-noble@sha256:693fdaf83831eeeefd9709eae44c8b8706622652f972cf5903bd0e481bbf6ad3 AS runtime
+FROM eclipse-temurin:26.0.2_10-jre-noble@sha256:0140636ef128fa014041fa12dae3a9de53b6a6c6f055271f4e6a7417ea34012c AS runtime
 
 # root가 아닌 전용 계정으로 실행해서, 앱이 뚫려도 컨테이너 안에서 root 권한을 얻지 못하게 한다.
 # UID/GID를 숫자 10001로 고정하는 이유는 두 가지다.
