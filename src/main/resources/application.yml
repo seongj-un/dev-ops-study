@@ -19,6 +19,11 @@ spring:
       # Redis가 죽었을 때 요청이 오래 멈추지 않게 짧게 둔다 (Lettuce 기본 명령 타임아웃은 60초)
       timeout: 500ms
       connect-timeout: 500ms
+  mvc:
+    problemdetails:
+      # 에러 응답을 RFC 9457 형식(application/problem+json)으로 통일한다
+      enabled: true
 
 shortener:
+  base-url: ${SHORTENER_BASE_URL:http://localhost:8080}
   cache-ttl: ${SHORTENER_CACHE_TTL:24h}
