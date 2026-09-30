@@ -24,6 +24,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Java는 LTS인 25에 머문다. Dependabot은 태그의 숫자만 비교해서 25 → 26(비 LTS, 6개월 뒤 지원 종료) 같은 메이저 업그레이드도 제안한다.
+      # 메이저 업데이트만 막고 25.x 안의 패치(보안 수정)는 계속 받는다. 다음 LTS(Java 29)로 옮길 때는 build.gradle.kts의 툴체인과 함께 직접 올린다.
+      - dependency-name: eclipse-temurin
+        update-types:
+          - version-update:semver-major
     groups:
       docker:
         patterns:
