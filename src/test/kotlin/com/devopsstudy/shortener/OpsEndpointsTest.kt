@@ -50,6 +50,11 @@ class OpsEndpointsTest(
 			status { isOk() }
 			jsonPath("$.build.artifact") { value("shortener") }
 			jsonPath("$.build.version") { value("0.0.1-SNAPSHOT") }
+			// commit은 CI가 넘긴 SHA일 수도, 로컬 기본값 "local"일 수도 있다. 개발 셸이나 CI에 GIT_COMMIT이 export돼 있어도 깨지지 않게 값은 고정하지 않고 비어 있지 않은 문자열인지만 본다
+			jsonPath("$.build.commit") {
+				isString()
+				isNotEmpty()
+			}
 		}
 	}
 
