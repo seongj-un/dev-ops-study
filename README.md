@@ -43,10 +43,15 @@ curl localhost:8080/api/v1/urls/$CODE
 | 변수 | 기본값 |
 |---|---|
 | `DB_HOST` / `DB_PORT` / `DB_NAME` | `localhost` / `5432` / `shortener` |
-| `DB_USERNAME` / `DB_PASSWORD` | `shortener` / `shortener` |
+| `DB_USERNAME` | `shortener` |
+| `DB_PASSWORD` | 없음 (필수) |
 | `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` |
 | `SHORTENER_BASE_URL` | `http://localhost:8080` |
 | `SHORTENER_CACHE_TTL` | `24h` |
+
+`DB_PASSWORD`는 개발용 기본값을 두지 않았다. 빠뜨리면 앱이 시작 단계에서 인증 오류로 죽는다 (compose는 항상 넘겨 주고, Testcontainers를 쓰는 테스트와 `bootTestRun`은 접속 정보를 직접 넣는다).
+
+Kubernetes에서는 `MANAGEMENT_SERVER_PORT=8081`을 주입해 위의 운영 엔드포인트(`/actuator/**`)를 앱 포트(8080)와 다른 8081 포트로 옮긴다.
 
 ## 로컬 개발
 
