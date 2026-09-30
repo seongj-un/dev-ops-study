@@ -12,8 +12,12 @@ class ShortUrlNotFoundException(code: String) : ErrorResponseException(
 	null,
 )
 
-class InvalidUrlException(url: String) : ErrorResponseException(
+// 입력한 URL을 detail에 되돌려 주지 않는다: 응답과 로그에 사용자 입력(자격 증명이 든 URL 등)이 그대로 남지 않게 한다.
+class InvalidUrlException : ErrorResponseException(
 	HttpStatus.BAD_REQUEST,
-	ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "only absolute http(s) URLs are allowed: $url"),
+	ProblemDetail.forStatusAndDetail(
+		HttpStatus.BAD_REQUEST,
+		"url must be an absolute http(s) URL without user info, at most ${ShortUrlService.MAX_URL_LENGTH} characters",
+	),
 	null,
 )

@@ -6,7 +6,7 @@ import java.time.Instant
 
 data class CreateShortUrlRequest(
 	@field:NotBlank
-	@field:Size(max = 2048)
+	@field:Size(max = ShortUrlService.MAX_URL_LENGTH)
 	val url: String,
 )
 

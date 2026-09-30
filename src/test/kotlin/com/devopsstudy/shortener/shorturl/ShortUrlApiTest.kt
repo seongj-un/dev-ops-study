@@ -65,6 +65,26 @@ class ShortUrlApiTest(
 	}
 
 	@Test
+	fun `javascript 스킴 URL은 400이다`() {
+		postUrlExpectingBadRequest("""{"url": "javascript:alert(1)"}""")
+	}
+
+	@Test
+	fun `사용자 정보가 들어간 URL은 400이다`() {
+		postUrlExpectingBadRequest("""{"url": "https://user:pass@example.com/x"}""")
+	}
+
+	@Test
+	fun `2048자를 넘는 URL은 400이다`() {
+		postUrlExpectingBadRequest("""{"url": "https://example.com/${"a".repeat(2048)}"}""")
+	}
+
+	@Test
+	fun `대문자 스킴 URL도 받아 준다`() {
+		createShortUrl("HTTPS://EXAMPLE.COM/upper")
+	}
+
+	@Test
 	fun `빈 URL은 400이다`() {
 		postUrlExpectingBadRequest("""{"url": ""}""")
 	}

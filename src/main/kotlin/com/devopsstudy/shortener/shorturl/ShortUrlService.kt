@@ -54,18 +54,26 @@ class ShortUrlService(
 		repository.findByCode(code) ?: throw ShortUrlNotFoundException(code)
 
 	private fun requireValidUrl(url: String) {
+		// DTO 검증을 거치지 않고 create()를 직접 부를 수도 있어 여기서도 막는다. 파싱보다 먼저 봐서 긴 입력에 파서를 돌리지 않는다.
+		// 막지 않으면 DB의 VARCHAR(2048) 위반이 DataIntegrityViolationException으로 올라와 코드 충돌 5번으로 오해받는다.
+		if (url.length > MAX_URL_LENGTH) throw InvalidUrlException()
 		val uri = try {
 			URI(url)
 		} catch (e: URISyntaxException) {
-			throw InvalidUrlException(url)
+			throw InvalidUrlException()
 		}
 		if (uri.scheme?.lowercase() !in ALLOWED_SCHEMES || uri.host.isNullOrBlank()) {
-			throw InvalidUrlException(url)
+			throw InvalidUrlException()
 		}
+		// 사용자 정보(user@, user:pass@)가 든 URL은 거절한다.
+		// https://good.com@evil.com은 good.com 링크처럼 보이지만 실제 목적지는 evil.com이라 피싱에 쓰이고,
+		// https://user:pass@host는 자격 증명을 DB와 응답에 그대로 저장하게 된다.
+		if (uri.rawUserInfo != null) throw InvalidUrlException()
 	}
 
 	companion object {
 		const val MAX_ATTEMPTS = 5
+		const val MAX_URL_LENGTH = 2048
 		private val ALLOWED_SCHEMES = setOf("http", "https")
 	}
 }

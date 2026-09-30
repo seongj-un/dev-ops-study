@@ -40,8 +40,21 @@ class ShortUrlServiceTest(
 	fun `5번 모두 겹치면 포기한다`() {
 		val taken = uniqueCode()
 		repository.saveAndFlush(ShortUrl(taken, "https://example.com/taken"))
-		val service = serviceGenerating(*Array(ShortUrlService.MAX_ATTEMPTS) { taken })
+		// 포기하기까지 생성기를 몇 번 불렀는지 센다: 1~4번 만에 포기하는 구현은 이 테스트를 통과하면 안 된다
+		var attempts = 0
+		val service = ShortUrlService(repository, ShortCodeGenerator { attempts++; taken }, cache, meterRegistry)
 
 		assertFailsWith<IllegalStateException> { service.create("https://example.com/never") }
+		assertEquals(ShortUrlService.MAX_ATTEMPTS, attempts)
+	}
+
+	@Test
+	fun `너무 긴 URL은 코드 충돌로 오해하지 않고 바로 거절한다`() {
+		// API의 DTO 검증을 거치지 않고 서비스를 직접 부르면 DB의 VARCHAR(2048) 제약 위반이 5번 충돌로 보였다
+		val tooLong = "https://example.com/" + "a".repeat(ShortUrlService.MAX_URL_LENGTH)
+
+		val service = serviceGenerating(*Array(ShortUrlService.MAX_ATTEMPTS) { uniqueCode() })
+
+		assertFailsWith<InvalidUrlException> { service.create(tooLong) }
 	}
 }
