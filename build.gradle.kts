@@ -19,6 +19,12 @@ repositories {
 	mavenCentral()
 }
 
+// Spring Boot 4.1.1이 관리하는 버전에 패치된 취약점이 있어서(CI의 Trivy 게이트가 잡았다) 그 라이브러리만 같은 마이너의 최신 패치로 올린다.
+// Boot의 의존성 관리(BOM)는 버전을 이런 프로퍼티로 정하므로, 프로퍼티만 바꾸면 관련 모듈(tomcat-embed-*, jackson-*)이 함께 올라간다.
+// 이 버전 이상을 포함한 Boot 패치 릴리스가 나오면 Boot를 올리고 이 두 줄은 지운다 (Dependabot의 Boot 업데이트 PR에서 확인).
+extra["tomcat.version"] = "11.0.26" // CVE-2026-65182, CVE-2026-65905, CVE-2026-68525 (CRITICAL, 11.0.25에서 수정)
+extra["jackson-bom.version"] = "3.1.7" // CVE-2026-68497 (HIGH, 3.1.6에서 수정)
+
 springBoot {
 	// /actuator/info에 버전을 노출한다. 지금 떠 있는 게 어떤 빌드인지 배포 후 확인할 때 쓴다.
 	buildInfo {
