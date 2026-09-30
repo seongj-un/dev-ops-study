@@ -1,0 +1,40 @@
+# Dependabot: 주 1회 의존성 갱신 PR을 자동으로 연다. 생태계마다 PR을 하나로 묶는다.
+#
+# 이 저장소는 GitHub Actions를 전체 커밋 SHA로, 베이스 이미지를 태그@sha256 다이제스트로 고정한다.
+# 고정한 값은 저절로 갱신되지 않아서 Dependabot이 없으면 보안 패치가 나와도 옛 버전에 머문다.
+# Dependabot은 액션의 SHA와 그 뒤의 `# vX.Y.Z` 주석을, 이미지의 태그와 다이제스트를 함께 올려 준다.
+# 갱신 PR에도 CI(테스트, 이미지 빌드, 취약점 스캔)가 돌아서 새 버전을 머지 전에 검증한다.
+#
+# groups로 묶는 이유: 갱신마다 PR이 따로 열리면 CI가 PR 수만큼 돌고 리뷰 부담이 커진다.
+# 생태계당 PR 하나로 모아서 한 번에 검토하고 머지한다.
+version: 2
+updates:
+  # .github/workflows의 액션 (SHA + 버전 주석)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Dockerfile의 베이스 이미지 (태그 + 다이제스트)
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns:
+          - "*"
+
+  # build.gradle.kts의 플러그인·의존성 버전과 Gradle 래퍼
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      gradle:
+        patterns:
+          - "*"
