@@ -1,6 +1,12 @@
+server:
+  # 종료 신호(SIGTERM)를 받으면 새 요청은 받지 않고, 처리 중인 요청을 끝낸 뒤 내려간다
+  shutdown: graceful
+
 spring:
   application:
     name: shortener
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
   datasource:
     # 12-Factor: 설정은 환경 변수로 주입한다. 기본값은 로컬 개발용이다.
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:shortener}
@@ -19,6 +25,40 @@ spring:
       # Redis가 죽었을 때 요청이 오래 멈추지 않게 짧게 둔다 (Lettuce 기본 명령 타임아웃은 60초)
       timeout: 500ms
       connect-timeout: 500ms
+  mvc:
+    problemdetails:
+      # 에러 응답을 RFC 9457 형식(application/problem+json)으로 통일한다
+      enabled: true
+
+logging:
+  structured:
+    format:
+      # 콘솔 로그를 한 줄짜리 JSON(ECS 형식)으로 찍는다. 로그 수집기(Alloy → Loki)가 필드 단위로 검색할 수 있다
+      console: ecs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      # 로컬에서도 /actuator/health/liveness, /readiness를 켠다 (Kubernetes 위에서는 자동으로 켜진다)
+      probes:
+        enabled: true
+      show-components: always
+      group:
+        # readiness: DB가 살아 있어야 트래픽을 받는다. Redis는 죽어도 DB로 버틸 수 있으니 넣지 않는다
+        readiness:
+          include: readinessState, db
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # p50/p95/p99 지연시간을 Prometheus에서 계산할 수 있게 히스토그램 버킷을 내보낸다
+      percentiles-histogram:
+        http.server.requests: true
 
 shortener:
+  base-url: ${SHORTENER_BASE_URL:http://localhost:8080}
   cache-ttl: ${SHORTENER_CACHE_TTL:24h}
