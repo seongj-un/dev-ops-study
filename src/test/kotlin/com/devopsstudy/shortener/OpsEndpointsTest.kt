@@ -63,7 +63,7 @@ class OpsEndpointsTest(
 
 		assertContains(body, "http_server_requests_seconds_bucket")
 		assertContains(body, "shortener_cache_requests_total")
-		assertContains(body, "shortener_urls_created_total")
+		assertContains(body, "shortener_urls_shortened_total")
 		assertContains(body, "application=\"shortener\"")
 	}
 

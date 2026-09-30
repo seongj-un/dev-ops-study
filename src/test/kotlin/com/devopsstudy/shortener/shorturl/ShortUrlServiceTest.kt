@@ -27,13 +27,13 @@ class ShortUrlServiceTest(
 		val taken = uniqueCode()
 		repository.saveAndFlush(ShortUrl(taken, "https://example.com/taken"))
 		val fresh = uniqueCode()
-		val createdBefore = meterRegistry.counter("shortener.urls.created").count()
+		val createdBefore = meterRegistry.counter("shortener.urls.shortened").count()
 
 		val created = serviceGenerating(taken, taken, fresh).create("https://example.com/new")
 
 		assertEquals(fresh, created.code)
 		assertEquals("https://example.com/new", repository.findByCode(fresh)?.originalUrl)
-		assertEquals(createdBefore + 1, meterRegistry.counter("shortener.urls.created").count())
+		assertEquals(createdBefore + 1, meterRegistry.counter("shortener.urls.shortened").count())
 	}
 
 	@Test

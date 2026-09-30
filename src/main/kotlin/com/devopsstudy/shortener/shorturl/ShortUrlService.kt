@@ -15,7 +15,8 @@ class ShortUrlService(
 	meterRegistry: MeterRegistry,
 ) {
 	private val log = LoggerFactory.getLogger(javaClass)
-	private val createdCounter = meterRegistry.counter("shortener.urls.created")
+	// 이름이 created로 끝나면 안 된다: Prometheus(OpenMetrics)는 _created를 예약 접미사로 써서 이 카운터를 shortener_urls_total로 내보낸다
+	private val shortenedCounter = meterRegistry.counter("shortener.urls.shortened")
 	private val redirectCounter = meterRegistry.counter("shortener.redirects")
 
 	/**
@@ -29,7 +30,7 @@ class ShortUrlService(
 			val code = codeGenerator.generate()
 			try {
 				val saved = repository.saveAndFlush(ShortUrl(code, originalUrl))
-				createdCounter.increment()
+				shortenedCounter.increment()
 				log.atInfo().addKeyValue("code", code).log("short url created")
 				return saved
 			} catch (e: DataIntegrityViolationException) {
