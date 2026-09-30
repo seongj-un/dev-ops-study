@@ -1,0 +1,47 @@
+# 로컬 개발용 전체 스택: docker compose up --build
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: shortener
+      DB_USERNAME: shortener
+      DB_PASSWORD: shortener
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SHORTENER_BASE_URL: http://localhost:8080
+    depends_on:
+      # 컨테이너가 "시작됨"이 아니라 "준비됨"(healthcheck 통과)일 때까지 기다린다
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: shortener
+      POSTGRES_USER: shortener
+      POSTGRES_PASSWORD: shortener
+    volumes:
+      # PostgreSQL 18 이미지부터 데이터 디렉터리가 /var/lib/postgresql/18/docker로 바뀌어 상위 폴더를 마운트한다
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shortener -d shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:

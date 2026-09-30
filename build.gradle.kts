@@ -59,3 +59,8 @@ allOpen {
 tasks.withType<Test> {
 	useJUnitPlatform()
 }
+
+tasks.bootJar {
+	// 버전이 바뀌어도 Dockerfile이 같은 경로를 쓸 수 있게 이름을 고정한다
+	archiveFileName = "app.jar"
+}

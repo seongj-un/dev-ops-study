@@ -1,0 +1,8 @@
+.git
+.gradle
+.kotlin
+.idea
+.superpowers
+build
+*.md
+.DS_Store
