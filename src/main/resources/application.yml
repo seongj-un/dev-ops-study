@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: shortener
+  datasource:
+    # 12-Factor: 설정은 환경 변수로 주입한다. 기본값은 로컬 개발용이다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:shortener}
+    username: ${DB_USERNAME:shortener}
+    password: ${DB_PASSWORD:shortener}
+  jpa:
+    hibernate:
+      # 스키마는 Flyway 마이그레이션이 관리한다. Hibernate는 테이블을 만들거나 고치지 않는다.
+      ddl-auto: none
+    # 요청이 끝날 때까지 DB 커넥션을 붙잡지 않도록 끈다.
+    open-in-view: false
