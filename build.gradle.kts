@@ -27,6 +27,10 @@ springBoot {
 	}
 }
 
+// Mockito(인라인 목 메이커)가 테스트 도중 스스로 에이전트를 붙이면 JDK 21+가 경고를 찍는다.
+// 문서대로 JVM 시작 때 -javaagent로 미리 붙여 경고를 없애고, 미래 JDK에서 자동 부착이 막혀도 테스트가 깨지지 않게 한다.
+val mockitoAgent = configurations.create("mockitoAgent")
+
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
 	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
@@ -50,6 +54,8 @@ dependencies {
 	testImplementation("org.testcontainers:testcontainers-junit-jupiter")
 	testImplementation("org.testcontainers:testcontainers-postgresql")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+	// 버전은 Spring BOM이 정한다. 에이전트 jar만 필요하므로 전이 의존성은 받지 않는다
+	mockitoAgent("org.mockito:mockito-core") { isTransitive = false }
 }
 
 kotlin {
@@ -66,6 +72,10 @@ allOpen {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+	jvmArgs("-javaagent:${mockitoAgent.asPath}")
+	// Mockito 인라인 목 메이커는 목 생성 시 부트스트랩 클래스패스에 jar를 덧붙이는데, 이러면 JVM이 CDS(클래스 공유)를 못 써서
+	// "Sharing is only supported for boot loader classes" 경고를 찍는다. 테스트 JVM에서는 CDS를 꺼서 경고를 없앤다.
+	jvmArgs("-Xshare:off")
 }
 
 tasks.bootJar {
