@@ -18,11 +18,14 @@ curl -i -X POST localhost:8080/api/v1/urls \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com"}'
 
+# curl은 URL의 {code}를 글로빙 패턴으로 해석하므로, 코드를 변수에 담아 쓴다
+CODE=aB3xY9z  # 위 응답의 "code" 값
+
 # 리다이렉트 → 302 Location: https://example.com
-curl -i localhost:8080/{code}
+curl -i localhost:8080/$CODE
 
 # 조회수 확인
-curl localhost:8080/api/v1/urls/{code}
+curl localhost:8080/api/v1/urls/$CODE
 ```
 
 ## 운영 엔드포인트

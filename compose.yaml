@@ -2,6 +2,8 @@
 services:
   app:
     build: .
+    # 빌드한 이미지에 찾을 수 있는 이름을 준다. 1단계에서 멀티스테이지로 바꾼 뒤 이 이미지와 크기를 비교한다
+    image: shortener:local
     ports:
       - "8080:8080"
     environment:
@@ -30,7 +32,9 @@ services:
       # PostgreSQL 18 이미지부터 데이터 디렉터리가 /var/lib/postgresql/18/docker로 바뀌어 상위 폴더를 마운트한다
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shortener -d shortener"]
+      # -h 127.0.0.1로 TCP 연결을 확인한다. 공식 이미지는 첫 기동 때 초기화용 임시 서버를 listen_addresses=''로 띄워
+      # 유닉스 소켓으로만 접속받는데, 소켓으로 확인하면 이때 healthy로 나와서 TCP로 붙는 앱이 너무 일찍 시작된다
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U shortener -d shortener"]
       interval: 5s
       timeout: 3s
       retries: 10
