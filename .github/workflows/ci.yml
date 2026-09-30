@@ -1,0 +1,238 @@
+# CI: PR과 main 푸시마다 테스트 -> 이미지 빌드 -> 취약점 스캔을 돌리고, main 푸시일 때만 GHCR에 이미지를 올린다.
+#
+# 잡 표시 이름(test, image)은 브랜치 룰셋이 필수 상태 검사로 지정한 이름이라 바꾸면 안 된다.
+# 같은 이유로 paths 필터도 두지 않는다. 필터로 워크플로가 건너뛰어지면 그 검사는 "Pending"으로 남고,
+# 필수 검사를 요구하는 PR은 머지할 수 없게 된다.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# 기본 권한은 contents 읽기뿐이다 (permissions에 적지 않은 권한은 모두 none이 된다).
+# 더 필요한 잡은 그 잡에서만 올린다 (아래 image 잡). 서드파티 액션이나 빌드 스크립트(PR 코드 포함)가
+# 악성으로 바뀌어도 토큰으로 할 수 있는 일이 저장소 읽기로 제한된다.
+permissions:
+  contents: read
+
+# 같은 ref(브랜치 또는 PR)에서 새 실행이 시작되면 이전 실행을 취소한다. 취소는 PR에서만 한다.
+# main에서는 진행 중인 실행을 끊지 않는다. 이미지 푸시 도중에 끊기지 않고 끝까지 돌게 하려는 것이다.
+# (대기 중인 실행은 더 새 실행이 오면 GitHub가 대체한다)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test
+    # ubuntu-latest는 GitHub가 가리키는 이미지를 새 LTS로 옮기면 워크플로를 고치지 않아도 환경이 바뀐다.
+    # 버전을 고정해 빌드 환경을 예측 가능하게 둔다.
+    runs-on: ubuntu-24.04
+    # 기본 타임아웃은 360분이다. 멈춘 잡(예: 이미지 풀 대기)이 러너를 6시간 붙잡지 않게 상한을 둔다.
+    timeout-minutes: 20
+    steps:
+      # 이 파일의 액션은 (GitHub이 만든 것도 포함해) 모두 태그(v4 등)가 아니라 전체 커밋 SHA로 고정하고, 뒤에 버전을 주석으로 남긴다.
+      # 태그는 저장소 소유자(또는 계정을 탈취한 공격자)가 다른 커밋으로 옮길 수 있는 이름이라, 태그로 참조하면 그 시점의 코드가 그대로 실행된다.
+      # 실제로 2026-03-19에 aquasecurity/trivy-action의 버전 태그 76개가 악성 커밋으로 강제 푸시돼, 태그로 참조한 워크플로가
+      # 러너의 비밀을 훔치는 코드를 실행했다 (GHSA-69fq-xp46-6x23). 안전한 커밋 SHA에 고정해 둔 워크플로는 영향이 없었다.
+      # 커밋 SHA는 내용의 해시라서 가리키는 코드가 바뀔 수 없다. 주석의 버전은 사람이 읽으라고 남긴 것이고,
+      # Dependabot이 SHA와 주석을 함께 올려 준다 (dependabot.yml 참고).
+      - name: 소스 체크아웃
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 빌드가 요구하는 JDK 25(toolchain)를 JAVA_HOME으로 잡는다. Gradle은 JAVA_HOME 같은 로컬 JDK를 먼저 탐지하고, 요구에 맞는 JDK를
+      # 못 찾을 때만 자동으로 내려받는다 (settings.gradle.kts의 foojay 리졸버). 그래서 미리 잡아 두면 다운로드 없이 그 JDK를 쓴다.
+      - name: JDK 25 설치
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # setup-gradle이 해 주는 일 두 가지.
+      # 1) 의존성 캐시: Gradle 사용자 홈(내려받은 의존성, 래퍼 배포본 등)을 Actions 캐시에 저장하고 복원한다.
+      #    캐시는 기본 브랜치(main)에서만 쓰고 PR은 읽기만 한다.
+      # 2) 래퍼 검증: 저장소의 모든 gradle-wrapper.jar의 SHA-256을 Gradle 공식 릴리스 체크섬과 대조하고, 모르는 jar면 실패한다.
+      #    gradle-wrapper.jar는 커밋된 바이너리를 ./gradlew가 그대로 실행하는 구조라서, 변조된 jar가 PR로 들어오면 CI 러너에서 임의 코드가 돈다.
+      # (v6의 기본 캐시 구현은 Gradle의 독점 라이브러리이고 공개 저장소에서는 무료다. MIT 구현을 쓰려면 cache-provider: basic)
+      - name: Gradle 설정
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+      # Testcontainers가 PostgreSQL·Redis 컨테이너를 러너에 설치된 Docker로 직접 띄우므로 services: 정의가 필요 없다.
+      - name: 테스트 실행
+        run: ./gradlew test
+
+      # 실패했을 때만 HTML 리포트를 남긴다. 러너는 잡이 끝나면 사라지므로, 올리지 않으면 실패 원인을 로그에서만 찾아야 한다.
+      # 아티팩트 이름은 한 run 안에서 유일해야 하고 v4 이후 아티팩트는 한 번 만들면 바뀌지 않는다(immutable).
+      # 재실행(re-run)은 같은 run에서 시도 번호만 올라가므로, 시도 번호를 이름에 붙여 재실행에서 이름이 겹치지 않게 한다.
+      - name: 테스트 리포트 업로드
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-report-${{ github.run_attempt }}
+          path: build/reports/tests/test
+
+  image:
+    name: image
+    # 테스트를 통과한 코드만 이미지로 만든다. 깨진 코드를 빌드·스캔하느라 러너 시간을 쓰지 않는다.
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # 잡 단위 permissions는 워크플로 단위 값에 더해지는 게 아니라 그것을 통째로 대체한다. 그래서 contents: read를 다시 적는다.
+    # 쓰기 권한은 필요한 이 잡에만 준다: packages: write(GHCR에 이미지 푸시), security-events: write(SARIF를 code scanning에 업로드).
+    # 권한은 잡 단위로만 나눌 수 있어서 PR 실행의 토큰에도 packages: write가 실리지만(포크 PR은 GitHub가 읽기로 낮춘다),
+    # 이를 쓰는 로그인·푸시 단계는 main 푸시에서만 실행한다.
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # gha 캐시 백엔드는 기본 docker 드라이버로는 쓸 수 없다(containerd 이미지 스토어를 켠 경우만 예외).
+      # 이 액션이 BuildKit 컨테이너를 쓰는 docker-container 드라이버 빌더를 만들어 준다.
+      - name: Buildx 설정
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # 이미지 이름은 ghcr.io/<소유자>/<저장소>(metadata-action이 소문자로 바꿔 준다), 태그는 커밋 전체 SHA(40자) 하나이고 접두사도 없다.
+      # latest 태그는 만들지 않는다. latest는 시점마다 다른 이미지를 가리키는 움직이는 이름이라 "지금 뭐가 떠 있나", "어디로 되돌리나"에 답할 수 없다.
+      # SHA 태그는 이미지를 소스 커밋과 1:1로 묶어서, 나중에 GitOps 배포 매니페스트가 정확히 이 빌드를 가리키게 해 준다.
+      # flavor: latest=false는 명시적인 잠금이다. type=sha만 쓰면 latest가 안 생기지만(기본값 auto에서는 type=semver,
+      # type=ref,event=tag 같은 규칙에서 생긴다), 나중에 태그 규칙을 더해도 latest가 슬쩍 붙지 않게 한다.
+      # 라벨(OCI)에는 이 이미지가 어느 저장소·커밋에서 나왔는지가 남는다. GHCR은 org.opencontainers.image.source 라벨로 패키지를 저장소에 연결한다.
+      - name: 이미지 이름·태그·라벨 계산
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: type=sha,format=long,prefix=
+          flavor: latest=false
+
+      # 순서가 핵심이다: 빌드(로컬 도커에만 적재) -> 스캔 -> 통과했을 때만 푸시.
+      # 푸시를 먼저 하면 게이트가 실패해도 그 SHA 태그의 이미지는 이미 레지스트리에 남아, 나중에 배포 매니페스트가 그 SHA를 가리키는 순간
+      # 취약한 이미지가 그대로 배포된다. 그래서 여기서는 push하지 않고 load로 러너의 도커에만 적재하고, 스캔도 그 로컬 이미지를 읽는다.
+      # context: .를 명시한다. build-push-action의 기본 컨텍스트는 Git 컨텍스트(BuildKit이 저장소를 직접 클론)라서,
+      # 위에서 체크아웃한 작업 디렉터리를 쓰려면 지정해야 한다.
+      # GIT_COMMIT 빌드 인자는 Dockerfile을 거쳐 /actuator/info의 commit이 된다. 지금 떠 있는 앱이 어느 커밋인지 확인하려는 것이다.
+      # cache-to의 mode=max: 멀티스테이지 빌드의 중간 스테이지(Gradle 빌드) 레이어까지 캐시한다.
+      # 기본값 min은 최종 이미지에 들어가는 레이어만 저장해서 빌드 스테이지가 매번 처음부터 돈다.
+      - name: 이미지 빌드 (로컬 도커에 적재)
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 취약점 스캔은 로컬에 적재한 이미지를 대상으로 두 번 돈다 (trivy는 한 번의 실행에 출력 형식을 하나만 낼 수 있다).
+      #   1) SARIF: GitHub code scanning(Security 탭)에 올릴 결과. exit-code 0이라 여기서는 실패하지 않는다.
+      #   2) table: 로그에 사람이 읽는 표로 남기고, 기준을 어기면 잡을 실패시키는 게이트.
+      # 정책은 둘 다 같다: CRITICAL·HIGH만, 그리고 패치가 이미 나온 것만(ignore-unfixed).
+      # 패치가 없는 취약점은 우리가 고칠 수단이 없어서(베이스 이미지가 갱신되길 기다려야 한다) 빌드를 막아 봐야 소용이 없다.
+      # trivy-action은 SARIF 형식이면 severity 입력을 무시하고 모든 등급을 담는다.
+      # limit-severities-for-sarif로 같은 정책을 강제해서 Security 탭과 게이트의 결과가 어긋나지 않게 한다.
+      #
+      # 취약점 DB는 두 실행이 같은 걸 쓴다. 첫 실행이 받거나 Actions 캐시에서 복원해 cache-dir에 두고, 두 번째 실행은 다운로드를 건너뛴다
+      # (skip-setup-trivy로 설치도, TRIVY_SKIP_*로 DB 갱신도 생략). 매번 새로 받으면 시간이 들고 DB 배포처의 rate limit에 걸려
+      # 스캔이 실패할 수 있다 (trivy-action README도 이 때문에 캐시를 켜 두라고 권한다). 두 실행이 같은 DB로 판정하는 효과도 있다.
+      # cache-dir과 SARIF 파일은 작업 디렉터리 밖(runner.temp)에 둔다. cache-dir 기본값은 $GITHUB_WORKSPACE/.cache/trivy인데,
+      # 작업 디렉터리에 파일이 생기면 아래 푸시용 빌드의 컨텍스트가 첫 빌드와 달라진다. Dockerfile이 작업 디렉터리를 통째로 COPY하면
+      # 그 레이어의 캐시가 깨져서, 스캔한 것과 다른 결과물을 새로 빌드해 올리게 된다.
+      - name: Trivy 스캔 (SARIF)
+        id: trivy-sarif
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: sarif
+          output: ${{ runner.temp }}/trivy.sarif
+          limit-severities-for-sarif: true
+          exit-code: '0'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          cache-dir: ${{ runner.temp }}/trivy-cache
+
+      - name: Trivy 게이트 (패치 가능한 CRITICAL·HIGH가 있으면 실패)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          cache-dir: ${{ runner.temp }}/trivy-cache
+          skip-setup-trivy: true
+          # 첫 실행이 이미 cache-dir에 DB를 받아 뒀으므로 Actions 캐시 복원·저장을 여기서 또 하지 않는다
+          cache: false
+        env:
+          TRIVY_SKIP_DB_UPDATE: true
+          TRIVY_SKIP_JAVA_DB_UPDATE: true
+
+      # always(): 게이트가 실패해도 결과는 올린다. 실패한 실행일수록 Security 탭에서 원인을 봐야 하기 때문이다.
+      # 다만 SARIF 파일을 만든 스캔이 성공했을 때만 실행한다 (빌드가 실패해 파일이 없을 때 '파일 없음' 오류가 진짜 원인을 가리지 않게).
+      # dependabot[bot] 실행(github.actor 기준)은 건너뛴다. 이런 실행의 GITHUB_TOKEN은 기본이 읽기 전용이라 security-events: write를
+      # 받지 못하는 경우가 있고, 그러면 code scanning 업로드가 403 "Resource not accessible by integration"으로 실패한다
+      # (GitHub의 code scanning 문제 해결 문서가 Dependabot 실행에서 안내하는 오류다).
+      # 결과 보고용 단계 하나 때문에 잡 전체가 빨개지지 않게 이 단계만 건너뛴다. 스캔과 게이트는 Dependabot 실행에서도 그대로 돈다.
+      - name: Trivy 결과를 code scanning에 업로드
+        if: always() && steps.trivy-sarif.outcome == 'success' && github.actor != 'dependabot[bot]'
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ runner.temp }}/trivy.sarif
+
+      # 여기부터는 main 푸시에서만 실행한다 (앞 단계가 모두 성공해야 도달한다: 스캔 게이트를 통과한 이미지만 올라간다).
+      - name: GHCR 로그인
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 같은 태그·라벨·빌드 인자로 다시 빌드하되 push: true. 위 빌드가 남긴 캐시(같은 빌더의 내부 캐시와 gha 캐시)를 그대로 써서
+      # 레이어를 다시 만들지 않으므로 스캔한 것과 같은 레이어가 올라간다. cache-to는 다시 쓰지 않는다 (위 빌드가 이미 내보냈다).
+      # 다만 매니페스트 다이제스트까지 같지는 않다. 푸시 결과에는 provenance 증명이 붙고(공개 저장소라 기본이 mode=max),
+      # 이미지 config의 생성 시각도 새로 찍힌다. 공개 저장소의 기본 provenance에는 build-args 값이 그대로 담기므로
+      # 비밀값은 build-args로 넘기면 안 된다 (GIT_COMMIT은 공개 정보라 괜찮다).
+      - name: 이미지 푸시
+        id: push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+
+      # 이미지 크기와 푸시한 태그를 실행 요약에 남긴다. 1단계에서 멀티스테이지로 바꾼 이미지를 0단계 이미지와 비교하는 데 쓴다.
+      # 스캔이 실패한 실행에서도 크기는 남도록 always()를 쓰되, 이미지가 만들어졌을 때만 실행한다.
+      # 크기는 docker image inspect가 보고하는 Size다 (0단계 이미지도 같은 명령으로 재면 같은 기준으로 비교된다).
+      - name: 실행 요약 남기기
+        if: always() && steps.build.outcome == 'success'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.tags }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+        run: |
+          size_bytes=$(docker image inspect "$IMAGE_REF" --format '{{.Size}}')
+          size_mb=$(awk -v bytes="$size_bytes" 'BEGIN { printf "%.1f", bytes / 1000000 }')
+          {
+            echo '### 이미지'
+            echo
+            echo "- 이미지: \`${IMAGE_REF}\`"
+            echo "- 크기: ${size_mb} MB (${size_bytes} bytes)"
+            if [ "$PUSH_OUTCOME" = 'success' ]; then
+              echo "- 푸시한 태그: \`${IMAGE_REF}\`"
+            else
+              echo '- 푸시: 안 함 (PR이거나 앞 단계가 실패했다)'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
