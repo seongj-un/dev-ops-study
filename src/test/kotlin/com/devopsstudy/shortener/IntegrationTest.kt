@@ -12,7 +12,8 @@ import org.springframework.context.annotation.Import
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
-@SpringBootTest
+// base-url을 테스트에서 고정한다: 개발 셸이나 CI에 SHORTENER_BASE_URL이 export돼 있어도 단축 주소 검증이 깨지지 않게 한다
+@SpringBootTest(properties = ["shortener.base-url=http://localhost:8080"])
 @AutoConfigureMockMvc
 @AutoConfigureMetrics
 @Import(TestcontainersConfiguration::class)

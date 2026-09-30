@@ -18,7 +18,7 @@ class Base62ShortCodeGeneratorTest {
 
 	@Test
 	fun `만 번 뽑아도 겹치지 않는다`() {
-		// 62^7 ≈ 3.5조 가지라 1만 개 중 겹칠 확률은 약 0.001%
+		// 62^7 ≈ 3.5조 가지라 1만 개 중 겹칠 확률은 n²/2N ≈ 1.4e-5, 약 0.0014%
 		val codes = List(10_000) { generator.generate() }.toSet()
 		assertEquals(10_000, codes.size)
 	}

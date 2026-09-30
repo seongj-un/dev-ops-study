@@ -4,11 +4,16 @@ import com.devopsstudy.shortener.IntegrationTest
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
+import java.time.Duration
+import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 @IntegrationTest
 class ShortUrlRepositoryTest(
@@ -25,7 +30,7 @@ class ShortUrlRepositoryTest(
 		assertNotNull(found.id)
 		assertEquals("https://example.com/a", found.originalUrl)
 		assertEquals(0L, found.clickCount)
-		assertNotNull(found.createdAt)
+		assertTrue(Duration.between(found.createdAt, Instant.now()).abs() < Duration.ofMinutes(1), "createdAt=${found.createdAt}")
 	}
 
 	@Test
@@ -52,6 +57,27 @@ class ShortUrlRepositoryTest(
 		assertEquals(1, repository.incrementClickCount(code))
 
 		assertEquals(2L, repository.findByCode(code)?.clickCount)
+	}
+
+	@Test
+	fun `동시에 조회수를 올려도 유실되지 않는다`() {
+		val code = uniqueCode()
+		repository.saveAndFlush(ShortUrl(code, "https://example.com/concurrent"))
+		val threads = 8
+		val incrementsPerThread = 25
+
+		// "읽고 → 더하고 → 저장"이었다면 동시 요청이 서로의 값을 덮어써 200보다 작아진다. 원자적 UPDATE가 있는 이유다.
+		val pool = Executors.newFixedThreadPool(threads)
+		try {
+			val futures = List(threads) {
+				pool.submit { repeat(incrementsPerThread) { repository.incrementClickCount(code) } }
+			}
+			futures.forEach { it.get(30, TimeUnit.SECONDS) }
+		} finally {
+			pool.shutdownNow()
+		}
+
+		assertEquals(200L, repository.findByCode(code)?.clickCount)
 	}
 
 	@Test

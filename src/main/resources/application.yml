@@ -43,7 +43,7 @@ management:
         include: health, info, prometheus
   endpoint:
     health:
-      # 로컬에서도 /actuator/health/liveness, /readiness를 켠다 (Kubernetes 위에서는 자동으로 켜진다)
+      # Spring Boot 4는 기본값이 true지만, Kubernetes 프로브가 /actuator/health/liveness, /readiness 경로에 의존하므로 명시해서 남긴다
       probes:
         enabled: true
       show-components: always
