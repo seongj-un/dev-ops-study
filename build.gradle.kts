@@ -70,7 +70,8 @@ allOpen {
 	annotation("jakarta.persistence.Embeddable")
 }
 
-tasks.withType<Test> {
+// configureEach: 테스트 태스크를 실제로 실행할 때만 설정한다. 그래야 bootJar 같은 빌드(Dockerfile)는 mockitoAgent를 내려받지 않는다
+tasks.withType<Test>().configureEach {
 	useJUnitPlatform()
 	jvmArgs("-javaagent:${mockitoAgent.asPath}")
 	// Mockito 인라인 목 메이커는 첫 목을 만들 때 부트스트랩 클래스패스에 jar를 덧붙인다. 그러면 JVM은 CDS(클래스 공유)를 부트 로더 클래스에만

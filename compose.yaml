@@ -4,6 +4,8 @@ services:
     build: .
     # 빌드한 이미지에 찾을 수 있는 이름을 준다. 1단계에서 멀티스테이지로 바꾼 뒤 이 이미지와 크기를 비교한다
     image: shortener:local
+    # docker compose stop의 기본 유예 시간은 10초라서, 앱의 graceful shutdown(최대 20초)이 끝나기 전에 SIGKILL로 죽을 수 있다
+    stop_grace_period: 30s
     ports:
       - "8080:8080"
     environment:
