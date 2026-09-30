@@ -97,17 +97,17 @@ curl -i -X POST http://shortener.localhost:8090/api/v1/urls \
 - 지우기: `helm uninstall shortener -n shortener`. PostgreSQL의 PVC(`data-shortener-postgresql-0`)는 남는다. 데이터까지 지우려면 `kubectl -n shortener delete pvc data-shortener-postgresql-0`.
   남은 PVC에는 처음 만들 때의 비밀번호가 들어 있어서, Secret을 바꿔 다시 설치하면 앱이 인증에 실패한다. 클러스터 전체는 `k3d cluster delete devops-study`.
 - 쓰지 않을 때는 `k3d cluster stop devops-study`로 멈춰 메모리를 돌려준다 (클러스터 안의 데이터는 남는다). 다시 켤 때는 `k3d cluster start devops-study`.
-- 부하를 걸어 HPA가 파드를 3개까지 늘리면 메모리 한도의 합(앱 512Mi × 3 + PostgreSQL 256Mi + Redis 128Mi)이 이 VM의 여유를 넘을 수 있다. 부하 시험 전에 `--set autoscaling.maxReplicas=2`로 줄이거나 Docker 메모리를 늘린다.
+- HPA의 최대 파드 수는 2다. 3개면 메모리 한도의 합(앱 512Mi × 3 + PostgreSQL 256Mi + Redis 128Mi)이 이 Docker VM(약 2.84GiB)의 여유를 넘어서, VM 전체가 메모리 부족에 빠질 수 있다. 더 늘리려면 Docker 메모리부터 늘린다.
 
 주요 값 (`deploy/helm/shortener/values.yaml`):
 
 | 값 | 설명 |
 |---|---|
-| `image.tag` | 필수. 이미지의 커밋 SHA 40자 |
+| `image.tag` | 필수. 이미지의 커밋 SHA 40자 (그 밖의 값이면 차트가 실패한다) |
 | `database.existingSecret` / `database.password` | DB 비밀번호. 둘 중 하나는 필수 (미리 만든 Secret을 가리키는 `existingSecret`을 권장) |
 | `baseUrl` | 응답의 `shortUrl` 앞에 붙는 공개 주소 (`SHORTENER_BASE_URL`) |
 | `ingress.host` | Traefik이 이 릴리스로 라우팅할 호스트 이름 (기본 `shortener.localhost`) |
-| `autoscaling.*` | HPA (기본 1~3개, CPU 사용률 70%) |
+| `autoscaling.*` | HPA (기본 1~2개, CPU 사용률 목표 70%) |
 | `postgresql.enabled` / `redis.enabled` | `false`이면 클러스터 안의 PostgreSQL·Redis를 만들지 않는다. 그때는 `database.host`·`redis.host`에 외부 주소를 넣는다 |
 
 차트를 고칠 때는 클러스터 없이 정적으로 검증한다 (kubeconform은 Docker로 돌린다):
@@ -116,7 +116,7 @@ curl -i -X POST http://shortener.localhost:8090/api/v1/urls \
 SHA=$(printf 'a%.0s' {1..40})   # 형식만 맞춘 가짜 SHA
 helm lint deploy/helm/shortener --strict --set image.tag=$SHA --set database.password=x
 helm template shortener deploy/helm/shortener --set image.tag=$SHA --set database.existingSecret=shortener-db \
-  | docker run -i --rm ghcr.io/yannh/kubeconform:v0.8.0 -strict -summary -kubernetes-version 1.35.0 -
+  | docker run -i --rm ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e -strict -summary -kubernetes-version 1.35.0 -
 ```
 
-`image.tag`나 비밀번호 없이 `helm template`을 돌리면 차트가 안내 메시지와 함께 실패한다 (`helm lint`는 필수 값이 빠져도 경고만 낸다).
+`image.tag`가 없거나 커밋 SHA 형식이 아니면(`latest` 등), 또는 비밀번호가 없으면 `helm template`이 안내 메시지와 함께 실패한다 (`helm lint`는 필수 값이 빠져도 경고만 낸다).

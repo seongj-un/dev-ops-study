@@ -51,7 +51,8 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- /*
 리소스에 붙이는 표준 레이블(app.kubernetes.io/*): 셀렉터 레이블에 차트 버전, 관리 도구, 소속 앱을 더한 것이다.
-version은 넘겼을 때만 붙인다(앱에는 배포한 이미지 태그를 넘겨서, 지금 떠 있는 게 어느 커밋인지 kubectl get -L app.kubernetes.io/version으로 볼 수 있다).
+version은 넘겼을 때만 붙인다. 앱 Deployment에는 배포할 이미지 태그(커밋 SHA)를 넘긴다. 다만 이것은 Deployment 리소스의 레이블이라 "배포하려는" 버전이고,
+파드마다 실제로 떠 있는 커밋은 파드 템플릿에 따로 붙인 version 레이블로 본다(deployment.yaml, kubectl get pods -L app.kubernetes.io/version).
 인자: dict "ctx" <.> "component" <...> ["version" <값>]
 */}}
 {{- define "shortener.labels" -}}
@@ -65,13 +66,17 @@ app.kubernetes.io/version: {{ . | quote }}
 {{- end }}
 
 {{- /*
-앱 이미지 참조(repository:tag). 태그가 비어 있으면 여기서 템플릿이 실패한다.
-latest처럼 움직이는 태그나 빈 태그로 배포하면 "지금 뭐가 떠 있나"에 답할 수 없어서, 커밋 SHA를 반드시 받는다.
+앱 이미지 참조(repository:tag). 태그는 커밋 SHA 전체(16진수 40자)만 받고, 그 밖의 값이면 여기서 템플릿이 실패한다.
+latest처럼 가리키는 이미지가 바뀌는 태그나 빈 태그로 배포하면 "지금 뭐가 떠 있나", "어디로 되돌리나"에 답할 수 없어서다.
+SHA 형식만 보고 GHCR에 그 태그가 실제로 있는지는 확인하지 않는다(없으면 파드가 ImagePullBackOff가 된다).
 toString은 숫자로만 된 태그를 Helm이 정수로 읽는 경우(--set image.tag=1234567)에 %s가 깨지지 않게 하려는 것이다.
 */}}
 {{- define "shortener.appImage" -}}
-{{- $tag := required "image.tag가 비어 있다. 배포할 이미지의 커밋 SHA(40자)를 넣어야 한다: --set image.tag=<커밋 SHA 40자>" .Values.image.tag -}}
-{{- printf "%s:%s" .Values.image.repository (toString $tag) -}}
+{{- $tag := required "image.tag가 비어 있다. 배포할 이미지의 커밋 SHA(40자)를 넣어야 한다: --set image.tag=<커밋 SHA 40자>" .Values.image.tag | toString -}}
+{{- if not (regexMatch "^[0-9a-f]{40}$" $tag) -}}
+{{- fail (printf "image.tag는 커밋 SHA 전체(소문자 16진수 40자)여야 한다. 받은 값: %q. latest 같은 움직이는 태그는 쓰지 않는다: 배포 하나가 커밋 하나에 정확히 대응해야 한다" $tag) -}}
+{{- end -}}
+{{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end }}
 
 {{- /* DB 비밀번호가 든 Secret의 이름: 기존 Secret을 쓰면 그 이름, 아니면 차트가 만드는 Secret의 이름 */}}
