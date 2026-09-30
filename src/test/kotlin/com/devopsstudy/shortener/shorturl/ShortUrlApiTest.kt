@@ -98,6 +98,12 @@ class ShortUrlApiTest(
 	}
 
 	@Test
+	fun `정확히 2048자인 URL은 받아 준다`() {
+		val prefix = "https://example.com/"
+		createShortUrl(prefix + "a".repeat(ShortUrlService.MAX_URL_LENGTH - prefix.length))
+	}
+
+	@Test
 	fun `대문자 스킴 URL도 받아 준다`() {
 		createShortUrl("HTTPS://EXAMPLE.COM/upper")
 	}
