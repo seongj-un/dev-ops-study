@@ -55,6 +55,24 @@ class ShortUrlApiTest(
 	}
 
 	@Test
+	fun `생성 응답과 이후 조회 응답의 createdAt이 같다`() {
+		val created = mockMvc.post("/api/v1/urls") {
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"url": "https://example.com/created-at"}"""
+		}.andExpect {
+			status { isCreated() }
+		}.andReturn().response.contentAsString
+		val code = JsonPath.read<String>(created, "$.code")
+
+		// 생성 응답은 메모리의 값이고 조회 응답은 DB에서 읽은 값이다. TIMESTAMPTZ는 마이크로초까지만 저장하므로
+		// 시각에 나노초가 남아 있으면(Linux) 두 응답이 어긋난다.
+		mockMvc.get("/api/v1/urls/$code").andExpect {
+			status { isOk() }
+			jsonPath("$.createdAt") { value(JsonPath.read<String>(created, "$.createdAt")) }
+		}
+	}
+
+	@Test
 	fun `http나 https가 아닌 URL은 400이다`() {
 		postUrlExpectingBadRequest("""{"url": "ftp://example.com/file"}""")
 	}
