@@ -11,7 +11,15 @@
 # digest는 이미지 내용의 해시라서 바뀌지 않는다. 그래서 언제 어디서 빌드해도 같은 베이스가 나오고, 누가 태그를 다른 이미지로 바꿔치기해도 빌드에 영향이 없다.
 # digest가 있으면 Docker는 태그를 무시하고 digest로만 이미지를 찾는다. 태그는 사람이 읽으라고 남긴 표시일 뿐이라 새 버전으로 옮길 때는 둘을 함께 바꿔야 한다(Dependabot이 PR로 함께 올려 준다).
 # 이 digest는 아키텍처별 이미지가 아니라 멀티 아키텍처 이미지 인덱스의 것이라서, arm64(맥)와 amd64(CI 러너) 어디서나 같은 줄로 통한다.
-FROM eclipse-temurin:25.0.4.1_1-jdk-noble@sha256:f6366ccac38ceae180280ad7012d18a15e8031548a430dc2bae06631d9e88ed0 AS build
+#
+# --platform=$BUILDPLATFORM: 이 스테이지를 이미지가 실행될 CPU(타깃 플랫폼)가 아니라, 빌드를 돌리는 머신(빌더)의 플랫폼에서 실행하라는 뜻이다.
+# BUILDPLATFORM은 BuildKit이 채워 주는 값(맥은 linux/arm64, CI 러너는 linux/amd64)이고, 위 인덱스에서 그 플랫폼의 이미지가 골라진다.
+# 이 스테이지가 만드는 jar는 CPU 종류와 무관한 바이트코드라서 amd64용과 arm64용이 똑같다. 그래서 Gradle 빌드는 빌더의 네이티브 CPU에서 한 번만 돌고,
+# 플랫폼마다 따로 만드는 것은 아래 실행 스테이지(작은 JRE 이미지와 그 위의 얇은 레이어)뿐이다.
+# 이 옵션이 없으면 이 스테이지도 타깃 플랫폼마다 한 번씩 돈다. 그러면 빌더와 CPU가 다른 타깃(amd64 러너에서 arm64 이미지를 만드는 경우)의 Gradle 빌드 전체가
+# QEMU 에뮬레이션 위에서 돌아서, 같은 jar를 두 번 만들 뿐 아니라 몇 배나 느려진다.
+# 다만 "jar가 플랫폼과 무관하다"는 전제는 의존성이 CPU별 네이티브 라이브러리를 담지 않을 때만 맞다(지금은 없다). 그런 의존성을 추가하면 이 스테이지를 다시 따져 봐야 한다.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25.0.4.1_1-jdk-noble@sha256:f6366ccac38ceae180280ad7012d18a15e8031548a430dc2bae06631d9e88ed0 AS build
 
 WORKDIR /app
 
@@ -47,6 +55,8 @@ RUN java -Djarmode=tools -jar build/libs/app.jar extract --layers --destination 
 
 # ---------- 2) 실행 스테이지 ----------
 # 실행에는 JRE만 있으면 된다. JRE 이미지에는 javac, jar 같은 개발 도구가 없어서 JDK 이미지보다 작고 공격 표면도 작다. 고정 방식(태그@digest)은 위와 같다.
+# 이 스테이지에는 --platform을 주지 않는다. 그래서 타깃 플랫폼마다 그 CPU용 JRE 이미지 위에 따로 만들어지고, 그것이 그 플랫폼의 최종 이미지가 된다.
+# (위 빌드 스테이지가 만든 jar와 달리) JVM과 OS 라이브러리는 이미지가 실행될 CPU에 맞는 네이티브 바이너리여야 하기 때문이다.
 FROM eclipse-temurin:25.0.4.1_1-jre-noble@sha256:693fdaf83831eeeefd9709eae44c8b8706622652f972cf5903bd0e481bbf6ad3 AS runtime
 
 # root가 아닌 전용 계정으로 실행해서, 앱이 뚫려도 컨테이너 안에서 root 권한을 얻지 못하게 한다.
@@ -55,6 +65,8 @@ FROM eclipse-temurin:25.0.4.1_1-jre-noble@sha256:693fdaf83831eeeefd9709eae44c8b8
 #  2) user namespace를 쓰지 않으면 컨테이너의 UID는 호스트에서도 같은 번호의 UID로 취급된다. 1000번대는 호스트의 일반 사용자와 겹치기 쉬워서 큰 번호를 쓴다.
 # --system과 nologin 셸은 사람이 로그인하는 계정이 아니라 프로세스만 돌리는 서비스 계정을 만든다(홈 디렉터리와 비밀번호 만료 정보가 없다).
 # 10001은 시스템 UID 범위(999 이하) 밖이라 useradd가 경고를 출력하지만, 계정은 정상적으로 만들어진다.
+# 이 RUN은 실행 스테이지에서 타깃 플랫폼의 바이너리(sh, groupadd, useradd)를 실제로 실행하는 유일한 단계다. 빌더와 CPU가 다른 타깃이면 이 단계만 QEMU 에뮬레이션 위에서 돈다.
+# 아래 WORKDIR, COPY, USER, EXPOSE, ENTRYPOINT는 디렉터리를 만들거나 파일을 옮기거나 이미지 설정을 적을 뿐 프로세스를 실행하지 않아서 에뮬레이션이 필요 없다.
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid 10001 --shell /usr/sbin/nologin app
 

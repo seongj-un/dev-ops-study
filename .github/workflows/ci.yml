@@ -1,4 +1,4 @@
-# CI: PR과 main 푸시마다 테스트 -> 이미지 빌드 -> 취약점 스캔을 돌리고, main 푸시일 때만 GHCR에 이미지를 올린다.
+# CI: PR과 main 푸시마다 테스트 -> 이미지 빌드(amd64, arm64) -> 취약점 스캔을 돌리고, main 푸시일 때만 GHCR에 멀티 아키텍처 이미지를 올린다.
 #
 # 잡 표시 이름(test, image)은 브랜치 룰셋이 필수 상태 검사로 지정한 이름이라 바꾸면 안 된다.
 # 같은 이유로 paths 필터도 두지 않는다. 필터로 워크플로가 건너뛰어지면 그 검사는 "Pending"으로 남고,
@@ -97,7 +97,18 @@ jobs:
         with:
           persist-credentials: false # test 잡과 같은 이유
 
-      # gha 캐시 백엔드는 기본 docker 드라이버로는 쓸 수 없다(containerd 이미지 스토어를 켠 경우만 예외).
+      # 러너(amd64)에서 arm64 이미지를 만들려면 QEMU 에뮬레이션이 필요하다. 이 액션은 QEMU 에뮬레이터를 커널의 binfmt_misc에 등록해서(tonistiigi/binfmt 이미지를 --privileged로 실행한다),
+      # 러너가 arm64 바이너리를 만나면 에뮬레이터를 거쳐 실행하게 한다. 그래야 BuildKit이 arm64 이미지 안에서 RUN 명령을 돌릴 수 있다.
+      # 에뮬레이션이 필요한 곳은 Dockerfile 실행 스테이지의 RUN groupadd/useradd 하나뿐이다. Gradle을 돌리는 빌드 스테이지는 FROM --platform=$BUILDPLATFORM 덕분에
+      # 러너의 네이티브 CPU(amd64)에서 한 번만 돌고, COPY 같은 나머지 단계는 프로세스를 실행하지 않는다. 에뮬레이션은 몇 배 느리지만 이 RUN은 짧게 끝난다.
+      # platforms: arm64: 러너가 amd64라서 amd64 에뮬레이터는 필요 없다. 기본값(all)은 쓰지 않는 아키텍처의 핸들러까지 전부 등록한다.
+      # 이 액션의 문서가 Buildx 설정보다 먼저 실행하라고 안내해서 그 앞에 둔다.
+      - name: QEMU 설정 (arm64 에뮬레이션)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      # gha 캐시 백엔드와 멀티 플랫폼 빌드는 기본 docker 드라이버로는 쓸 수 없다(containerd 이미지 스토어를 켠 경우만 예외).
       # 이 액션이 BuildKit 컨테이너를 쓰는 docker-container 드라이버 빌더를 만들어 준다.
       - name: Buildx 설정
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -105,6 +116,8 @@ jobs:
       # 이미지 이름은 ghcr.io/<소유자>/<저장소>(metadata-action이 소문자로 바꿔 준다), 태그는 커밋 전체 SHA(40자) 하나이고 접두사도 없다.
       # latest 태그는 만들지 않는다. latest는 시점마다 다른 이미지를 가리키는 움직이는 이름이라 "지금 뭐가 떠 있나", "어디로 되돌리나"에 답할 수 없다.
       # SHA 태그는 이미지를 소스 커밋과 1:1로 묶어서, 나중에 GitOps 배포 매니페스트가 정확히 이 빌드를 가리키게 해 준다.
+      # 이 태그 하나가 amd64와 arm64 이미지를 묶은 인덱스(멀티 아키텍처 이미지)를 가리켜서, 노드의 컨테이너 런타임이 자기 CPU에 맞는 쪽을 알아서 받아 간다.
+      # 그래서 배포 매니페스트가 플랫폼별 태그를 따로 알 필요가 없다.
       # flavor: latest=false는 명시적인 잠금이다. type=sha만 쓰면 latest가 안 생기지만(기본값 auto에서는 type=semver,
       # type=ref,event=tag 같은 규칙에서 생긴다), 나중에 태그 규칙을 더해도 latest가 슬쩍 붙지 않게 한다.
       # 라벨(OCI)에는 이 이미지가 어느 저장소·커밋에서 나왔는지가 남는다. GHCR은 org.opencontainers.image.source 라벨로 패키지를 저장소에 연결한다.
@@ -119,63 +132,137 @@ jobs:
       # 순서가 핵심이다: 빌드(로컬 도커에만 적재) -> 스캔 -> 통과했을 때만 푸시.
       # 푸시를 먼저 하면 게이트가 실패해도 그 SHA 태그의 이미지는 이미 레지스트리에 남아, 나중에 배포 매니페스트가 그 SHA를 가리키는 순간
       # 취약한 이미지가 그대로 배포된다. 그래서 여기서는 push하지 않고 load로 러너의 도커에만 적재하고, 스캔도 그 로컬 이미지를 읽는다.
+      #
+      # 플랫폼마다 따로 빌드해서 적재한다. Trivy는 이미지 하나(= 한 플랫폼)씩 스캔하는데, 두 플랫폼을 한 번에 빌드한 결과는 이미지들을 묶은 인덱스라서
+      # containerd 이미지 스토어를 켜지 않은 도커(지금 러너가 그렇다)에는 적재할 수 없다. 그래서 스캔할 이미지를 플랫폼별로 따로 만든다.
+      # scan:amd64와 scan:arm64는 이 러너의 도커에서만 쓰는 이름이라 레지스트리에는 올라가지 않는다(진짜 태그는 아래 푸시 단계가 붙인다).
+      # 두 빌드는 같은 빌더의 내부 캐시를 공유한다. Gradle을 돌리는 빌드 스테이지는 Dockerfile의 FROM --platform=$BUILDPLATFORM 덕분에
+      # 타깃 플랫폼과 무관하게 똑같은 단계라서, 먼저 도는 amd64 빌드가 끝낸 결과를 arm64 빌드가 그대로 재사용한다(빌드 로그에 CACHED로 나온다).
+      # 그래서 Gradle은 두 빌드를 합쳐서 한 번만 돈다.
+      #
       # context: .를 명시한다. build-push-action의 기본 컨텍스트는 Git 컨텍스트(BuildKit이 저장소를 직접 클론)라서,
       # 위에서 체크아웃한 작업 디렉터리를 쓰려면 지정해야 한다.
       # GIT_COMMIT 빌드 인자는 Dockerfile을 거쳐 /actuator/info의 commit이 된다. 지금 떠 있는 앱이 어느 커밋인지 확인하려는 것이다.
+      #
+      # gha 캐시는 scope(캐시 묶음의 이름)를 정하지 않으면 모든 빌드가 같은 이름(buildkit)을 쓰고, 나중에 캐시를 내보낸 빌드가 앞의 캐시를 덮어써서 마지막 것만 남는다.
+      # 두 빌드가 그렇게 하면 arm64 빌드가 amd64 빌드의 캐시를 지우므로, cache-to는 플랫폼마다 scope를 나눠 쓰고(amd64, arm64) cache-from은 둘 다 읽는다.
+      # 빌드 스테이지의 캐시는 두 scope에 다 들어 있고, 플랫폼별로 따로 만드는 실행 스테이지의 캐시는 그 플랫폼의 scope에만 들어 있다.
       # cache-to의 mode=max: 멀티스테이지 빌드의 중간 스테이지(Gradle 빌드) 레이어까지 캐시한다.
       # 기본값 min은 최종 이미지에 들어가는 레이어만 저장해서 빌드 스테이지가 매번 처음부터 돈다.
-      - name: 이미지 빌드 (로컬 도커에 적재)
-        id: build
+      - name: 이미지 빌드 (amd64, 로컬 도커에 적재)
+        id: build-amd64
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          platforms: linux/amd64
           load: true
           push: false
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: scan:amd64
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64
+          cache-to: type=gha,scope=amd64,mode=max
 
-      # 취약점 스캔은 로컬에 적재한 이미지를 대상으로 두 번 돈다 (trivy는 한 번의 실행에 출력 형식을 하나만 낼 수 있다).
+      # 위 amd64 빌드와 인자가 같고 플랫폼, 태그, cache-to의 scope만 다르다.
+      # 러너의 CPU(amd64)와 다른 타깃이라서 이 빌드의 실행 스테이지 RUN groupadd/useradd가 QEMU 위에서 돈다(위 QEMU 설정 단계).
+      - name: 이미지 빌드 (arm64, 로컬 도커에 적재)
+        id: build-arm64
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: scan:arm64
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64
+          cache-to: type=gha,scope=arm64,mode=max
+
+      # 취약점 스캔은 로컬에 적재한 두 이미지(amd64, arm64) 각각에 두 번씩, 모두 네 번 돈다 (trivy는 한 번의 실행에 출력 형식을 하나만 낼 수 있다).
       #   1) SARIF: GitHub code scanning(Security 탭)에 올릴 결과. exit-code 0이라 여기서는 실패하지 않는다.
       #   2) table: 로그에 사람이 읽는 표로 남기고, 기준을 어기면 잡을 실패시키는 게이트.
-      # 정책은 둘 다 같다: CRITICAL·HIGH만, 그리고 패치가 이미 나온 것만(ignore-unfixed).
+      # 두 플랫폼을 다 스캔하는 이유: 두 이미지가 같은 jar를 담아도 실행 스테이지의 OS 패키지는 CPU마다 따로 빌드된 것이라 판정이 어긋날 수 있다.
+      # 정책은 네 번 모두 같다: CRITICAL·HIGH만, 그리고 패치가 이미 나온 것만(ignore-unfixed).
       # 패치가 없는 취약점은 우리가 고칠 수단이 없어서(베이스 이미지가 갱신되길 기다려야 한다) 빌드를 막아 봐야 소용이 없다.
       # trivy-action은 SARIF 형식이면 severity 입력을 무시하고 모든 등급을 담는다.
       # limit-severities-for-sarif로 같은 정책을 강제해서 Security 탭과 게이트의 결과가 어긋나지 않게 한다.
       #
-      # 취약점 DB는 두 실행이 같은 걸 쓴다. 첫 실행이 받거나 Actions 캐시에서 복원해 cache-dir에 두고, 두 번째 실행은 다운로드를 건너뛴다
+      # 취약점 DB는 네 실행이 같은 걸 쓴다. 첫 실행(amd64 SARIF)이 받거나 Actions 캐시에서 복원해 cache-dir에 두고, 나머지 세 실행은 다운로드를 건너뛴다
       # (skip-setup-trivy로 설치도, TRIVY_SKIP_*로 DB 갱신도 생략). 매번 새로 받으면 시간이 들고 DB 배포처의 rate limit에 걸려
-      # 스캔이 실패할 수 있다 (trivy-action README도 이 때문에 캐시를 켜 두라고 권한다). 두 실행이 같은 DB로 판정하는 효과도 있다.
+      # 스캔이 실패할 수 있다 (trivy-action README도 이 때문에 캐시를 켜 두라고 권한다). 네 실행이 같은 DB로 판정하는 효과도 있다.
       # cache-dir과 SARIF 파일은 작업 디렉터리 밖(runner.temp)에 둔다. cache-dir 기본값은 $GITHUB_WORKSPACE/.cache/trivy인데,
-      # 작업 디렉터리에 파일이 생기면 아래 푸시용 빌드의 컨텍스트가 첫 빌드와 달라진다. Dockerfile이 작업 디렉터리를 통째로 COPY하면
+      # 작업 디렉터리에 파일이 생기면 아래 푸시용 빌드의 컨텍스트가 스캔한 이미지를 만든 두 빌드와 달라진다. Dockerfile이 작업 디렉터리를 통째로 COPY하면
       # 그 레이어의 캐시가 깨져서, 스캔한 것과 다른 결과물을 새로 빌드해 올리게 된다.
-      - name: Trivy 스캔 (SARIF)
-        id: trivy-sarif
+      - name: Trivy 스캔 (amd64, SARIF)
+        id: trivy-sarif-amd64
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ steps.meta.outputs.tags }}
+          image-ref: scan:amd64
           format: sarif
-          output: ${{ runner.temp }}/trivy.sarif
+          output: ${{ runner.temp }}/trivy-amd64.sarif
           limit-severities-for-sarif: true
           exit-code: '0'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           cache-dir: ${{ runner.temp }}/trivy-cache
 
-      - name: Trivy 게이트 (패치 가능한 CRITICAL·HIGH가 있으면 실패)
+      # arm64 이미지도 같은 정책으로 스캔한다. 설치와 DB는 위 amd64 스캔이 준비해 둔 것을 쓴다(아래 게이트 둘도 같다).
+      # 첫 실행이 이미 cache-dir에 DB를 받아 뒀으므로 Actions 캐시 복원·저장을 여기서 또 하지 않는다(cache: false).
+      - name: Trivy 스캔 (arm64, SARIF)
+        id: trivy-sarif-arm64
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ steps.meta.outputs.tags }}
+          image-ref: scan:arm64
+          format: sarif
+          output: ${{ runner.temp }}/trivy-arm64.sarif
+          limit-severities-for-sarif: true
+          exit-code: '0'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          cache-dir: ${{ runner.temp }}/trivy-cache
+          skip-setup-trivy: true
+          cache: false
+        env:
+          TRIVY_SKIP_DB_UPDATE: true
+          TRIVY_SKIP_JAVA_DB_UPDATE: true
+
+      # 게이트는 SARIF 스캔 둘이 끝난 뒤에 돌린다. 한쪽 게이트가 실패해도 두 플랫폼의 SARIF가 이미 만들어져 있어서 아래 업로드가 둘 다 올릴 수 있다.
+      - name: Trivy 게이트 (amd64, 패치 가능한 CRITICAL·HIGH가 있으면 실패)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: scan:amd64
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           cache-dir: ${{ runner.temp }}/trivy-cache
           skip-setup-trivy: true
-          # 첫 실행이 이미 cache-dir에 DB를 받아 뒀으므로 Actions 캐시 복원·저장을 여기서 또 하지 않는다
+          cache: false
+        env:
+          TRIVY_SKIP_DB_UPDATE: true
+          TRIVY_SKIP_JAVA_DB_UPDATE: true
+
+      # amd64 게이트가 실패해도 arm64 게이트는 돌려서, 한 번의 실행에서 두 플랫폼의 결과를 다 본다.
+      # !cancelled(): 앞 단계가 실패했어도 실행하고, 취소된 실행에서는 돌지 않는다. arm64 SARIF 스캔이 성공했을 때만 실행한다(이미지와 취약점 DB가 준비됐다는 뜻이다).
+      # 그래도 잡은 실패로 끝난다. 아래 로그인·푸시 단계는 앞 단계가 하나라도 실패하면 실행되지 않는다.
+      - name: Trivy 게이트 (arm64, 패치 가능한 CRITICAL·HIGH가 있으면 실패)
+        if: ${{ !cancelled() && steps.trivy-sarif-arm64.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: scan:arm64
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          cache-dir: ${{ runner.temp }}/trivy-cache
+          skip-setup-trivy: true
           cache: false
         env:
           TRIVY_SKIP_DB_UPDATE: true
@@ -187,11 +274,23 @@ jobs:
       # 받지 못하는 경우가 있고, 그러면 code scanning 업로드가 403 "Resource not accessible by integration"으로 실패한다
       # (GitHub의 code scanning 문제 해결 문서가 Dependabot 실행에서 안내하는 오류다).
       # 결과 보고용 단계 하나 때문에 잡 전체가 빨개지지 않게 이 단계만 건너뛴다. 스캔과 게이트는 Dependabot 실행에서도 그대로 돈다.
-      - name: Trivy 결과를 code scanning에 업로드
-        if: always() && steps.trivy-sarif.outcome == 'success' && github.actor != 'dependabot[bot]'
+      #
+      # category: 같은 커밋에서 같은 도구(Trivy)의 SARIF를 둘 올리므로 플랫폼마다 category를 달리 줘야 한다. GitHub 문서에 따르면 같은 커밋에
+      # 같은 category, 같은 도구로 두 번째를 올리면 앞의 결과가 덮어써지고, 한 워크플로 실행 안에서 그렇게 올리면 설정 오류로 감지돼 실행이 실패한다.
+      # category가 다르면 code scanning이 두 결과를 각각 따로 보관한다.
+      - name: Trivy 결과를 code scanning에 업로드 (amd64)
+        if: always() && steps.trivy-sarif-amd64.outcome == 'success' && github.actor != 'dependabot[bot]'
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
-          sarif_file: ${{ runner.temp }}/trivy.sarif
+          sarif_file: ${{ runner.temp }}/trivy-amd64.sarif
+          category: trivy-linux-amd64
+
+      - name: Trivy 결과를 code scanning에 업로드 (arm64)
+        if: always() && steps.trivy-sarif-arm64.outcome == 'success' && github.actor != 'dependabot[bot]'
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ runner.temp }}/trivy-arm64.sarif
+          category: trivy-linux-arm64
 
       # 여기부터는 main 푸시에서만 실행한다 (앞 단계가 모두 성공해야 도달한다: 스캔 게이트를 통과한 이미지만 올라간다).
       - name: GHCR 로그인
@@ -202,40 +301,48 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 같은 태그·라벨·빌드 인자로 다시 빌드하되 push: true. 위 빌드가 남긴 캐시(같은 빌더의 내부 캐시와 gha 캐시)를 그대로 써서
-      # 레이어를 다시 만들지 않으므로 스캔한 것과 같은 레이어가 올라간다. cache-to는 다시 쓰지 않는다 (위 빌드가 이미 내보냈다).
+      # 같은 태그·라벨·빌드 인자로 다시 빌드하되, 이번에는 두 플랫폼을 한 번에 만들어(platforms) push: true로 올린다.
+      # 위 두 빌드가 같은 빌더에 남긴 캐시(빌더의 내부 캐시와 gha 캐시)를 그대로 써서 레이어를 다시 만들지 않는다.
+      # Gradle도, QEMU 위에서 도는 RUN groupadd/useradd도 다시 돌지 않으므로 스캔한 것과 같은 레이어가 올라간다.
+      # 새로 만드는 것은 플랫폼별 이미지 매니페스트와 설정, provenance 증명, 그리고 이것들을 묶는 인덱스뿐이다.
+      # 그래서 SHA 태그는 amd64와 arm64를 함께 가리키는 멀티 아키텍처 인덱스가 된다. cache-to는 다시 쓰지 않는다 (위 두 빌드가 scope별로 이미 내보냈다).
       # 다만 매니페스트 다이제스트까지 같지는 않다. 푸시 결과에는 provenance 증명이 붙고(공개 저장소라 기본이 mode=max),
       # 이미지 config의 생성 시각도 새로 찍힌다. 공개 저장소의 기본 provenance에는 build-args 값이 그대로 담기므로
       # 비밀값은 build-args로 넘기면 안 된다 (GIT_COMMIT은 공개 정보라 괜찮다).
-      - name: 이미지 푸시
+      - name: 멀티 아키텍처 이미지 푸시 (amd64 + arm64)
         id: push
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
-          cache-from: type=gha
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64
 
       # 이미지 크기와 푸시한 태그를 실행 요약에 남긴다. 1단계에서 멀티스테이지로 바꾼 이미지를 0단계 이미지와 비교하는 데 쓴다.
-      # 스캔이 실패한 실행에서도 크기는 남도록 always()를 쓰되, 이미지가 만들어졌을 때만 실행한다.
+      # 두 플랫폼의 크기를 각각 남긴다. 스캔이 실패한 실행에서도 크기는 남도록 always()를 쓰되, 두 이미지가 모두 만들어졌을 때만 실행한다.
       # 크기는 docker image inspect가 보고하는 Size다 (0단계 이미지도 같은 명령으로 재면 같은 기준으로 비교된다).
       - name: 실행 요약 남기기
-        if: always() && steps.build.outcome == 'success'
+        if: always() && steps.build-amd64.outcome == 'success' && steps.build-arm64.outcome == 'success'
         env:
           IMAGE_REF: ${{ steps.meta.outputs.tags }}
           PUSH_OUTCOME: ${{ steps.push.outcome }}
         run: |
-          size_bytes=$(docker image inspect "$IMAGE_REF" --format '{{.Size}}')
-          size_mb=$(awk -v bytes="$size_bytes" 'BEGIN { printf "%.1f", bytes / 1000000 }')
           {
             echo '### 이미지'
             echo
-            echo "- 이미지: \`${IMAGE_REF}\`"
-            echo "- 크기: ${size_mb} MB (${size_bytes} bytes)"
+            echo "- 이미지: \`${IMAGE_REF}\` (linux/amd64, linux/arm64)"
+            for arch in amd64 arm64; do
+              size_bytes=$(docker image inspect "scan:${arch}" --format '{{.Size}}')
+              size_mb=$(awk -v bytes="$size_bytes" 'BEGIN { printf "%.1f", bytes / 1000000 }')
+              echo "- 크기 (linux/${arch}): ${size_mb} MB (${size_bytes} bytes)"
+            done
             if [ "$PUSH_OUTCOME" = 'success' ]; then
               echo "- 푸시한 태그: \`${IMAGE_REF}\`"
             else
