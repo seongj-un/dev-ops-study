@@ -1,0 +1,53 @@
+# 로컬 개발용 전체 스택: docker compose up --build
+services:
+  app:
+    build: .
+    # 빌드한 이미지에 찾을 수 있는 이름을 준다. 1단계에서 멀티스테이지로 바꾼 뒤 이 이미지와 크기를 비교한다
+    image: shortener:local
+    # docker compose stop의 기본 유예 시간은 10초라서, 앱의 graceful shutdown(최대 20초)이 끝나기 전에 SIGKILL로 죽을 수 있다
+    stop_grace_period: 30s
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: shortener
+      DB_USERNAME: shortener
+      DB_PASSWORD: shortener
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SHORTENER_BASE_URL: http://localhost:8080
+    depends_on:
+      # 컨테이너가 "시작됨"이 아니라 "준비됨"(healthcheck 통과)일 때까지 기다린다
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: shortener
+      POSTGRES_USER: shortener
+      POSTGRES_PASSWORD: shortener
+    volumes:
+      # PostgreSQL 18 이미지부터 데이터 디렉터리가 /var/lib/postgresql/18/docker로 바뀌어 상위 폴더를 마운트한다
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      # -h 127.0.0.1로 TCP 연결을 확인한다. 공식 이미지는 첫 기동 때 초기화용 임시 서버를 listen_addresses=''로 띄워
+      # 유닉스 소켓으로만 접속받는데, 소켓으로 확인하면 이때 healthy로 나와서 TCP로 붙는 앱이 너무 일찍 시작된다
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U shortener -d shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:

@@ -1,0 +1,77 @@
+server:
+  # 종료 신호(SIGTERM)를 받으면 새 요청은 받지 않고, 처리 중인 요청을 끝낸 뒤 내려간다.
+  # Spring Boot 4.1에서는 이미 기본값이지만, 이 동작에 기대고 있다는 걸 드러내려고 일부러 적어 둔다
+  shutdown: graceful
+
+spring:
+  application:
+    name: shortener
+  lifecycle:
+    # 종료 단계(SmartLifecycle phase) 하나가 끝나길 기다리는 최대 시간이다 (기본 30초). graceful shutdown에서는 처리 중인 요청을 기다려 주는 시간이 된다.
+    # Kubernetes의 기본 종료 유예 시간(terminationGracePeriodSeconds, 30초) 안에 끝나도록 20초로 줄였다.
+    # preStop 훅이 도는 시간도 같은 유예 시간에서 빠지므로, 나중에 preStop 지연을 넣을 여유를 남기는 값이기도 하다
+    timeout-per-shutdown-phase: 20s
+  datasource:
+    # 12-Factor: 설정은 환경 변수로 주입한다. 기본값은 로컬 개발용이다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:shortener}
+    username: ${DB_USERNAME:shortener}
+    password: ${DB_PASSWORD:shortener}
+  jpa:
+    hibernate:
+      # 스키마는 Flyway 마이그레이션이 만들고 바꾼다. Hibernate는 테이블을 고치지 않고, 시작할 때 엔티티와 테이블이 맞는지 검사만 한다.
+      # 어긋나면(컬럼 이름·타입 불일치 등) 첫 쿼리가 아니라 앱 시작 시점에 바로 실패한다
+      ddl-auto: validate
+    # 요청이 끝날 때까지 DB 커넥션을 붙잡지 않도록 끈다.
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # timeout은 명령 하나가 응답을 기다리는 최대 시간이다. Lettuce 기본값은 60초라서, Redis가 응답 없이 멈추면 요청 스레드가 그동안 묶인다.
+      # 500ms로 줄여도 최악의 경우는 남는다: 리다이렉트 한 번이 Redis를 두 번 부르기 때문이다 (조회 get, 그리고 캐시에 없을 때의 저장 put).
+      # get이 실패하면 캐시 미스와 똑같이 DB에서 읽은 뒤 put을 또 부르므로, Redis가 응답하지 않으면 get이 타임아웃 난 다음 put도 타임아웃까지 기다린다.
+      # 그래서 리다이렉트마다 최대 약 1초(500ms × 2)가 더 걸린다. 이미 맺은 연결이 끊긴 경우(Redis 프로세스 종료 등)도 마찬가지다:
+      # Lettuce는 기본으로 자동 재연결을 하면서 그동안 들어온 명령을 쌓아 두므로, 명령은 재연결되거나 타임아웃 날 때까지 기다린다.
+      # 새로 연결을 맺다가 거절당하는 경우(앱이 뜰 때 Redis가 없는 경우 등)만 즉시 실패한다.
+      # 5단계(장애 훈련)에서 이 지연을 측정하고, get이 실패하면 put을 건너뛰거나 서킷 브레이커를 두는 식으로 줄인다
+      timeout: 500ms
+      # 연결을 맺는 데 기다리는 최대 시간
+      connect-timeout: 500ms
+  mvc:
+    problemdetails:
+      # Spring MVC가 직접 던지는 예외(잘못된 요청 본문 등)와 ErrorResponseException 하위 클래스(우리 코드의 400/404)를 RFC 9457 형식(application/problem+json)으로 바꿔 준다.
+      # 처리하지 못한 예외(DB 장애, 코드 생성 재시도 소진 등)는 여기에 해당하지 않아서 /error를 거쳐 Boot 기본 에러 JSON(timestamp, status, error, path)의 500이 된다
+      enabled: true
+
+logging:
+  structured:
+    format:
+      # 콘솔 로그를 한 줄짜리 JSON(ECS 형식)으로 찍는다. 로그 수집기(Alloy → Loki)가 필드 단위로 검색할 수 있다
+      console: ecs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      # Spring Boot 4는 기본값이 true지만, Kubernetes 프로브가 /actuator/health/liveness, /readiness 경로에 의존하므로 명시해서 남긴다
+      probes:
+        enabled: true
+      show-components: always
+      group:
+        # readiness: DB가 살아 있어야 트래픽을 받는다. Redis는 죽어도 DB로 버틸 수 있으니 넣지 않는다
+        readiness:
+          include: readinessState, db
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # p50/p95/p99 지연시간을 Prometheus에서 계산할 수 있게 히스토그램 버킷을 내보낸다
+      percentiles-histogram:
+        http.server.requests: true
+
+shortener:
+  base-url: ${SHORTENER_BASE_URL:http://localhost:8080}
+  cache-ttl: ${SHORTENER_CACHE_TTL:24h}
