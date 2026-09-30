@@ -12,3 +12,13 @@ spring:
       ddl-auto: none
     # 요청이 끝날 때까지 DB 커넥션을 붙잡지 않도록 끈다.
     open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # Redis가 죽었을 때 요청이 오래 멈추지 않게 짧게 둔다 (Lettuce 기본 명령 타임아웃은 60초)
+      timeout: 500ms
+      connect-timeout: 500ms
+
+shortener:
+  cache-ttl: ${SHORTENER_CACHE_TTL:24h}
