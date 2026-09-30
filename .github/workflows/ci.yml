@@ -371,7 +371,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # 이 잡이 설정 저장소에 쓰는 힘은 GITHUB_TOKEN이 아니라 아래 배포 키에서 나온다. GITHUB_TOKEN은 이 앱 저장소에서만 유효한데 이 잡은 앱 저장소에 쓰지 않으므로 읽기만 둔다.
-    # (잡 단위 permissions는 워크플로 단위 값을 통째로 대체하므로 contents: read를 다시 적는다.)
+    # 워크플로 단위 permissions도 이미 contents: read라서 이 블록을 빼도 권한은 달라지지 않는다. 그래도 적어 두는 것은 읽는 사람에게 이 잡의 권한과 최소 권한 의도를 바로 보여 주려는 것이다.
+    # (잡 단위 permissions는 워크플로 단위 블록에 더해지지 않고 그것을 대체한다. 그래서 이 잡이 받는 권한 전체를 이 자리에 적어 두면 무엇이 적용되는지 한눈에 보인다.)
     permissions:
       contents: read
     # 설정 저장소의 main에는 한 번에 한 잡만 쓴다. 같은 저장소에서 같은 그룹 이름을 쓰는 잡은 동시에 하나만 돈다. 이 그룹은 ref가 아니라 "설정 저장소에 쓰기"를 가리키는 이름이라,
@@ -428,8 +429,9 @@ jobs:
       # (-e: 키가 없거나 null이면 종료 코드 1로 실패한다.)
       # 이미 같은 태그면 파일을 건드리지 않고 끝낸다. 같은 커밋의 잡을 다시 돌려도 빈 커밋이나 서식만 바뀐 커밋이 생기지 않는다.
       #
-      # yq는 파일을 다시 쓴다. 주석은 그대로 두지만 빈 줄을 없애고, 들여쓰기와 줄 끝 주석 앞의 공백을 yq 방식으로 맞춘다.
-      # 값 파일이 아직 yq가 쓴 모양이 아니면 첫 커밋에만 서식 변경이 함께 들어가고, 그 뒤로는 태그 한 줄만 바뀐다.
+      # yq(v4)는 파일을 다시 쓴다. 주석과 값은 그대로 두지만 키 사이의 빈 줄은 없애고(첫 키 앞, 파일 맨 위 주석 부분의 빈 줄은 남는다), 들여쓰기와 줄 끝 주석 앞의 공백은 yq 방식으로 맞춘다.
+      # 그래서 설정 저장소는 값 파일을 이미 yq가 쓰는 모양으로 정리해서(`yq -i '.' 파일`) 커밋해 둔다. 정리된 파일은 다시 써도 그대로라서, 갱신 커밋의 diff는 언제나 image.tag 한 줄이다.
+      # 정리되지 않은 파일이면 첫 갱신 커밋에만 서식 변경이 함께 들어가고, 그 뒤로는 태그 한 줄만 바뀐다.
       - name: dev 이미지 태그 갱신 (yq)
         id: bump
         run: |
@@ -461,17 +463,27 @@ jobs:
           echo 'changed=true' >> "$GITHUB_OUTPUT"
 
       # 봇 이름으로 커밋해서 푸시한다. 이 커밋이 "dev에 이 SHA를 띄운다"는 원하는 상태의 기록이고, Argo CD가 이 커밋을 가져가 클러스터에 반영한다.
-      # 설정 저장소의 main은 PR을 요구하는 룰셋으로 보호되는데 이 배포 키가 룰셋의 우회(bypass) 대상이라, PR 없이 바로 푸시할 수 있다. prod는 사람이 PR로 바꾼다.
-      # 우회는 룰셋 전체를 건너뛰는 것이라 키 자체는 main의 어느 파일이든 PR 없이 바꿀 수 있다(prod 값 파일도). dev 값 파일의 태그 한 줄만 바꾸는 것은 이 스크립트가 지키는 약속이다.
+      # 설정 저장소의 main은 룰셋 두 개로 보호된다. 우회(bypass) 대상은 자기가 등록된 룰셋의 규칙을 전부 건너뛴다. 규칙 하나만 골라서 우회시킬 수는 없으므로 룰셋을 둘로 나눴다.
+      #   (a) "PR 필수" 룰셋: 이 배포 키가 우회 대상이다. 그래서 CI는 PR 없이 dev 태그를 바로 푸시한다. prod는 사람이 PR로 바꾼다.
+      #   (b) force-push·삭제 금지 룰셋: 우회 대상이 없다. 그래서 이 키로도 main의 이력을 다시 쓰거나 main을 지울 수 없다.
+      # 다만 (a)를 건너뛰는 키는 PR 없이 main에 새 커밋을 얹을 수 있으니 prod 값 파일도 바꿀 수 있다. dev 값 파일의 태그 한 줄만 바꾸는 것은 이 스크립트가 지키는 약속이다.
       #
-      # 푸시가 거절될 수 있다. 설정 저장소에는 CI 말고 사람도 쓴다(PR 머지: 차트 수정, prod 승격 등). 우리가 체크아웃한 뒤에 그쪽 main이 앞서 나가면
-      # 우리 커밋은 원격 main 위에 있지 않아서(non-fast-forward), git이 남의 커밋을 덮어쓰지 않으려고 푸시를 막는다.
-      # 그래서 원격 main을 받아(git pull --rebase) 우리 커밋을 그 위로 다시 얹은 뒤 푸시한다. 최대 3번 시도한다.
-      # 두 커밋이 같은 줄(image.tag)을 바꿔서 rebase가 충돌하면 자동으로 풀지 않고 잡을 실패시킨다.
+      # 푸시가 거절될 수 있다. 설정 저장소에는 CI 말고 사람도 쓴다(PR 머지: 차트 수정, prod 승격 등). 우리가 체크아웃한 뒤에 그쪽 main에 커밋이 더 생기면
+      # 우리 커밋은 원격 main 위에 있지 않아서, git이 남의 커밋을 덮어쓰지 않으려고 푸시를 막는다. 이때 git은 `! [rejected] ... (fetch first)`(원격의 새 커밋이 우리 저장소에 아직 없다)나
+      # `(non-fast-forward)`(그 커밋이 우리 저장소에 있는데도 우리 커밋이 그 위에 있지 않다)를 출력한다. 재시도는 이 경우에만 한다.
+      # 원격 main을 받아(git pull --rebase) 우리 커밋을 그 위로 다시 얹은 뒤 푸시하고, 최대 3번 시도한다.
+      # 두 커밋이 같은 줄(image.tag)을 바꿔서 rebase가 충돌하면 자동으로 풀지 않는다. 어느 값이 맞는지는 사람이 정할 일이라, 충돌임을 밝힌 ::error::로 잡을 실패시킨다.
       # 이 잡끼리는 concurrency로 직렬화돼 서로를 거절시키지 않는다. 이 재시도는 사람의 푸시와 겹칠 때를 위한 것이다.
       #
+      # 그 밖의 실패는 다시 얹는다고 풀리지 않으니 재시도하지 않고 바로 실패시킨다. 예를 들면 룰셋 위반(GH013: 서버가 `! [remote rejected] ... (push declined due to repository rule violations)`로 거절한다)이나
+      # 배포 키의 쓰기 권한 부족이다. 같은 푸시를 세 번 되풀이해도 같은 실패만 나오고, 진짜 사유는 재시도 경고에 묻힌다. 네트워크 오류 같은 일시적 실패도 여기서는 재시도하지 않는다.
+      # git push는 거절 사유와 상관없이 종료 코드 1로 끝나서(원격에 접속하지 못하는 치명적 오류는 128) 종료 코드로는 사유를 가를 수 없다. 그래서 push의 출력을 변수에 받아 위 문구가 있는지로 가른다.
+      # 출력은 성공이든 실패든 로그에 그대로 찍는다. 실패할 때는 ::error::에도 담는데, 워크플로 명령은 한 줄이라 줄바꿈을 %0A로(% 자체는 %25로) 바꿔서 넣는다.
+      #
+      # 커밋 메시지 본문은 printf로 만든다. 셸 문자열 안에서 줄을 바꿔 두 줄을 이어 쓰면 둘째 줄의 YAML 들여쓰기가 본문 앞의 공백으로 들어가기 때문이다. printf의 \n은 들여쓰기와 상관없다.
+      #
       # 푸시가 끝나면 그 설정 저장소 커밋의 링크를 실행 요약에 남긴다.
-      - name: 커밋하고 푸시 (거절되면 rebase 후 재시도)
+      - name: 커밋하고 푸시 (원격이 앞서 나갔으면 rebase 후 재시도)
         if: steps.bump.outputs.changed == 'true'
         env:
           APP_COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
@@ -483,22 +495,34 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
           git add -- "$VALUES_FILE"
-          git commit --quiet \
-            -m "deploy(dev): shortener ${IMAGE_TAG::7}" \
-            -m "앱 커밋: ${APP_COMMIT_URL}
-          CI 실행: ${RUN_URL}"
+          body=$(printf '앱 커밋: %s\nCI 실행: %s' "$APP_COMMIT_URL" "$RUN_URL")
+          git commit --quiet -m "deploy(dev): shortener ${IMAGE_TAG::7}" -m "$body"
           git --no-pager show --stat --format=fuller HEAD
 
           for attempt in 1 2 3; do
-            if git push origin HEAD:main; then
+            if out=$(git push origin HEAD:main 2>&1); then
+              echo "$out"
               break
             fi
-            if [ "$attempt" -eq 3 ]; then
-              echo '::error::푸시가 3번 모두 실패했다. 위 git 출력의 사유를 확인한다 (룰셋 위반이면 배포 키가 우회 대상인지, 인증 오류면 키에 쓰기 권한이 있는지).'
+            echo "$out"
+
+            out_escaped=${out//'%'/'%25'}
+            out_escaped=${out_escaped//$'\r'/'%0D'}
+            out_escaped=${out_escaped//$'\n'/'%0A'}
+
+            if ! grep -Eq 'fetch first|non-fast-forward' <<<"$out"; then
+              echo "::error::푸시가 실패했다. 원격 main이 앞서 나가서 거절된 것이 아니라서 다시 얹어도 풀리지 않으니 재시도하지 않는다. 룰셋 위반(GH013)이면 설정 저장소 룰셋에서 이 배포 키가 우회(bypass) 대상인지, 인증 오류면 배포 키에 쓰기 권한이 있는지 확인한다. git 출력:%0A${out_escaped}"
               exit 1
             fi
-            echo "::warning::푸시가 실패했다 (시도 ${attempt}/3). 원격 main이 앞서 나갔을 수 있으니 받아서 그 위로 커밋을 다시 얹고 재시도한다."
-            git pull --rebase origin main
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::원격 main이 앞서 나가서 푸시가 3번 모두 거절됐다. 설정 저장소에 다른 푸시가 계속 들어오는 중일 수 있다. 마지막 git 출력:%0A${out_escaped}"
+              exit 1
+            fi
+            echo "::warning::원격 main이 앞서 나가서 푸시가 거절됐다 (시도 ${attempt}/3). 원격 main을 받아 그 위로 커밋을 다시 얹고 재시도한다."
+            if ! git pull --rebase origin main; then
+              echo '::error::원격 main 위로 커밋을 다시 얹지 못했다 (git pull --rebase 실패). 위 git 출력에 CONFLICT가 있으면 원격 main의 다른 커밋이 우리와 같은 줄(image.tag)을 바꾼 것이라 자동으로 풀지 않는다. 설정 저장소의 dev 값 파일과 최근 커밋을 확인한다. CONFLICT가 없으면 원격에서 받아오지 못한 것이다.'
+              exit 1
+            fi
           done
 
           commit_sha=$(git rev-parse HEAD)
