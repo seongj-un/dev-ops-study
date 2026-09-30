@@ -19,6 +19,14 @@ repositories {
 	mavenCentral()
 }
 
+springBoot {
+	// /actuator/info에 버전을 노출한다. 지금 떠 있는 게 어떤 빌드인지 배포 후 확인할 때 쓴다.
+	buildInfo {
+		// 빌드 시각을 빼야 코드가 같으면 결과물도 같다 (Gradle 캐시가 잘 먹는다)
+		excludes = setOf("time")
+	}
+}
+
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
 	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
