@@ -73,8 +73,9 @@ allOpen {
 tasks.withType<Test> {
 	useJUnitPlatform()
 	jvmArgs("-javaagent:${mockitoAgent.asPath}")
-	// Mockito 인라인 목 메이커는 목 생성 시 부트스트랩 클래스패스에 jar를 덧붙이는데, 이러면 JVM이 CDS(클래스 공유)를 못 써서
-	// "Sharing is only supported for boot loader classes" 경고를 찍는다. 테스트 JVM에서는 CDS를 꺼서 경고를 없앤다.
+	// Mockito 인라인 목 메이커는 첫 목을 만들 때 부트스트랩 클래스패스에 jar를 덧붙인다. 그러면 JVM은 CDS(클래스 공유)를 부트 로더 클래스에만
+	// 적용하고 그 밖의 클래스(플랫폼·앱 로더)는 공유하지 못하는데, 이때 "Sharing is only supported for boot loader classes" 경고를 찍는다.
+	// 테스트 JVM에서는 CDS를 통째로 꺼서 경고를 없앤다.
 	jvmArgs("-Xshare:off")
 }
 

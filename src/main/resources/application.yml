@@ -1,11 +1,15 @@
 server:
-  # 종료 신호(SIGTERM)를 받으면 새 요청은 받지 않고, 처리 중인 요청을 끝낸 뒤 내려간다
+  # 종료 신호(SIGTERM)를 받으면 새 요청은 받지 않고, 처리 중인 요청을 끝낸 뒤 내려간다.
+  # Spring Boot 4.1에서는 이미 기본값이지만, 이 동작에 기대고 있다는 걸 드러내려고 일부러 적어 둔다
   shutdown: graceful
 
 spring:
   application:
     name: shortener
   lifecycle:
+    # 종료 단계(SmartLifecycle phase) 하나가 끝나길 기다리는 최대 시간이다 (기본 30초). graceful shutdown에서는 처리 중인 요청을 기다려 주는 시간이 된다.
+    # Kubernetes의 기본 종료 유예 시간(terminationGracePeriodSeconds, 30초) 안에 끝나도록 20초로 줄였다.
+    # preStop 훅이 도는 시간도 같은 유예 시간에서 빠지므로, 나중에 preStop 지연을 넣을 여유를 남기는 값이기도 하다
     timeout-per-shutdown-phase: 20s
   datasource:
     # 12-Factor: 설정은 환경 변수로 주입한다. 기본값은 로컬 개발용이다.
@@ -22,12 +26,18 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      # Redis가 죽었을 때 요청이 오래 멈추지 않게 짧게 둔다 (Lettuce 기본 명령 타임아웃은 60초)
+      # timeout은 명령 하나가 응답을 기다리는 최대 시간이다. Lettuce 기본값은 60초라서, Redis가 응답 없이 멈추면 요청 스레드가 그동안 묶인다.
+      # 500ms로 줄여도 최악의 경우는 남는다: 리다이렉트 한 번이 Redis를 두 번 부르기 때문이다 (조회 get, 그리고 캐시에 없을 때의 저장 put).
+      # get이 실패하면 캐시 미스와 똑같이 DB에서 읽은 뒤 put을 또 부르므로, Redis가 응답하지 않으면 get이 타임아웃 난 다음 put도 타임아웃까지 기다린다.
+      # 그래서 리다이렉트마다 최대 약 1초(500ms × 2)가 더 걸린다. 연결이 바로 거절되는 장애(프로세스 종료 등)는 즉시 실패해서 이 지연이 없다.
+      # 5단계(장애 훈련)에서 이 지연을 측정하고, get이 실패하면 put을 건너뛰거나 서킷 브레이커를 두는 식으로 줄인다
       timeout: 500ms
+      # 연결을 맺는 데 기다리는 최대 시간
       connect-timeout: 500ms
   mvc:
     problemdetails:
-      # 에러 응답을 RFC 9457 형식(application/problem+json)으로 통일한다
+      # Spring MVC가 직접 던지는 예외(잘못된 요청 본문 등)와 ErrorResponseException 하위 클래스(우리 코드의 400/404)를 RFC 9457 형식(application/problem+json)으로 바꿔 준다.
+      # 처리하지 못한 예외(DB 장애, 코드 생성 재시도 소진 등)는 여기에 해당하지 않아서 /error를 거쳐 Boot 기본 에러 JSON(timestamp, status, error, path)의 500이 된다
       enabled: true
 
 logging:

@@ -34,7 +34,7 @@ curl localhost:8080/api/v1/urls/$CODE
 |---|---|
 | `/actuator/health/liveness` | 프로세스가 살아 있는지 (죽었으면 재시작 대상) |
 | `/actuator/health/readiness` | 트래픽을 받을 준비가 됐는지 (DB 연결 포함, Redis 제외) |
-| `/actuator/health` | 전체 상태 (DB, Redis 등 구성요소별) |
+| `/actuator/health` | 전체 상태 (DB, Redis 등 구성요소별). Redis가 죽으면 503을 돌려주므로 프로브로 쓰면 안 된다. 프로브에는 위의 liveness/readiness를 쓴다 |
 | `/actuator/info` | 빌드 버전 |
 | `/actuator/prometheus` | Prometheus 메트릭 |
 
@@ -47,6 +47,14 @@ curl localhost:8080/api/v1/urls/$CODE
 | `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` |
 | `SHORTENER_BASE_URL` | `http://localhost:8080` |
 | `SHORTENER_CACHE_TTL` | `24h` |
+
+## 로컬 개발
+
+```bash
+./gradlew bootTestRun   # compose 없이 앱만 실행. Testcontainers가 PostgreSQL·Redis를 띄워 연결해 준다 (Docker 필요)
+```
+
+앱은 `http://localhost:8080`에서 뜨고, 접속 정보는 Testcontainers가 직접 넣어 주므로 `DB_*`·`REDIS_*` 환경 변수는 필요 없다. 종료(Ctrl+C)하면 컨테이너도 함께 정리된다.
 
 ## 테스트
 
