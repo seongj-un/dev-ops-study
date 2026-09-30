@@ -24,6 +24,11 @@ springBoot {
 	buildInfo {
 		// 빌드 시각을 빼야 코드가 같으면 결과물도 같다 (Gradle 캐시가 잘 먹는다)
 		excludes = setOf("time")
+		properties {
+			// CI가 GIT_COMMIT 환경변수로 커밋 SHA를 넘기면 /actuator/info의 build.commit으로 나와, 떠 있는 앱이 어느 커밋인지 알 수 있다. 환경변수가 없으면(로컬 빌드) "local".
+			// Provider를 그대로 넘겨서 환경변수를 구성 단계가 아니라 태스크 입력을 계산할 때 읽는다. 그래서 커밋이 바뀌어도 구성 캐시는 그대로 재사용되고, 입력이 바뀐 bootBuildInfo만 다시 실행된다.
+			additional.put("commit", providers.environmentVariable("GIT_COMMIT").orElse("local"))
+		}
 	}
 }
 
