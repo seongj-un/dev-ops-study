@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.post
 import tools.jackson.databind.json.JsonMapper
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 @IntegrationTest
 @ExtendWith(OutputCaptureExtension::class)
@@ -70,6 +71,28 @@ class OpsEndpointsTest(
 		assertContains(body, "shortener_cache_requests_total")
 		assertContains(body, "shortener_urls_shortened_total")
 		assertContains(body, "application=\"shortener\"")
+	}
+
+	@Test
+	fun `지연시간 히스토그램에 SLO 경계 100ms, 300ms, 1s의 정확한 버킷이 있다`() {
+		mockMvc.get("/api/v1/urls/nosuch1") // 앱 요청의 http.server.requests 메트릭을 하나 남긴다 (SLI는 /actuator를 뺀 앱 요청이다)
+
+		val body = mockMvc.get("/actuator/prometheus").andExpect {
+			status { isOk() }
+		}.andReturn().response.contentAsString
+
+		// 시계열 하나(uri 하나)의 버킷 경계(le 레이블 값)만 모은다
+		val upperBounds = body.lines()
+			.filter { it.startsWith("http_server_requests_seconds_bucket{") && it.contains("uri=\"/api/v1/urls/{code}\"") }
+			.map { Regex("""le="([^"]+)"""").find(it)!!.groupValues[1] }
+			.toSet()
+
+		// Prometheus가 "300ms 이하" 요청 수를 정확히 세려면 경계가 0.3초인 버킷이 있어야 한다 (히스토그램 기본 버킷에는 0.3초가 없다)
+		assertContains(upperBounds, "0.1")
+		assertContains(upperBounds, "0.3")
+		assertContains(upperBounds, "1.0")
+		// SLO 경계는 percentiles-histogram의 기본 버킷에 더해지는 것이라 둘 다 있어야 한다. SLO 경계 세 개만 남으면 p95/p99를 구할 촘촘한 버킷이 사라진다
+		assertTrue(upperBounds.size > 10, "percentiles-histogram의 기본 버킷도 남아 있어야 한다: $upperBounds")
 	}
 
 	@Test
