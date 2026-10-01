@@ -73,7 +73,7 @@ RUN apt-get update \
 #  2) user namespace를 쓰지 않으면 컨테이너의 UID는 호스트에서도 같은 번호의 UID로 취급된다. 1000번대는 호스트의 일반 사용자와 겹치기 쉬워서 큰 번호를 쓴다.
 # --system과 nologin 셸은 사람이 로그인하는 계정이 아니라 프로세스만 돌리는 서비스 계정을 만든다(홈 디렉터리와 비밀번호 만료 정보가 없다).
 # 10001은 시스템 UID 범위(999 이하) 밖이라 useradd가 경고를 출력하지만, 계정은 정상적으로 만들어진다.
-# 이 RUN은 실행 스테이지에서 타깃 플랫폼의 바이너리(sh, groupadd, useradd)를 실제로 실행하는 유일한 단계다. 빌더와 CPU가 다른 타깃이면 이 단계만 QEMU 에뮬레이션 위에서 돈다.
+# 지금 실행 스테이지에서 타깃 플랫폼의 바이너리를 실제로 실행하는 단계는 둘뿐이다: 위의 RUN apt-get(openssl 업그레이드)과 이 RUN(sh, groupadd, useradd). 빌더와 CPU가 다른 타깃이면 이 두 단계만 QEMU 에뮬레이션 위에서 돈다.
 # 아래 WORKDIR, COPY, USER, EXPOSE, ENTRYPOINT는 디렉터리를 만들거나 파일을 옮기거나 이미지 설정을 적을 뿐 프로세스를 실행하지 않아서 에뮬레이션이 필요 없다.
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid 10001 --shell /usr/sbin/nologin app
