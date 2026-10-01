@@ -59,6 +59,14 @@ RUN java -Djarmode=tools -jar build/libs/app.jar extract --layers --destination 
 # (위 빌드 스테이지가 만든 jar와 달리) JVM과 OS 라이브러리는 이미지가 실행될 CPU에 맞는 네이티브 바이너리여야 하기 때문이다.
 FROM eclipse-temurin:25.0.4.1_1-jre-noble@sha256:693fdaf83831eeeefd9709eae44c8b8706622652f972cf5903bd0e481bbf6ad3 AS runtime
 
+# 임시 조치: 베이스 이미지의 libssl3t64·openssl이 3.0.13-0ubuntu3.15라서, 이대로면 CI의 Trivy 게이트가 HIGH CVE-2026-84782(3.0.13-0ubuntu3.16에서 수정)로 실패한다.
+# 위 digest의 이미지는 Ubuntu가 수정판을 내기 전에 빌드됐고 업스트림이 아직 다시 빌드하지 않아서, digest를 올려서는 고칠 수 없다. 그래서 이 두 패키지만 Ubuntu 보안 업데이트로 올린다(--only-upgrade는 이미 깔린 패키지만 올리고, apt 목록은 같은 RUN에서 지워야 레이어에 남지 않는다).
+# 앱의 TLS는 JDK 내장 JSSE가 처리하고 네이티브 OpenSSL(netty-tcnative 등)은 로드하지 않는다(build.gradle.kts에 그런 의존성이 없다). 그래서 앱이 거치는 경로를 막으려는 것이 아니라 알려진 취약 패키지를 이미지에 싣지 않으려는 조치다.
+# 베이스 digest가 3.0.13-0ubuntu3.16 이상을 담은 재빌드로 올라가면(Dependabot의 docker 업데이트 PR이 제안한다) 이 RUN과 주석을 지운다.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade libssl3t64 openssl \
+    && rm -rf /var/lib/apt/lists/*
+
 # root가 아닌 전용 계정으로 실행해서, 앱이 뚫려도 컨테이너 안에서 root 권한을 얻지 못하게 한다.
 # UID/GID를 숫자 10001로 고정하는 이유는 두 가지다.
 #  1) Kubernetes의 runAsNonRoot: true는 Pod에 runAsUser가 없으면 이미지의 USER가 숫자일 때만 root가 아님을 검증할 수 있다. 이름(app)이면 kubelet이 "non-numeric user"라며 컨테이너 시작을 거부한다.
