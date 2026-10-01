@@ -1,6 +1,7 @@
 package com.devopsstudy.shortener
 
 import com.zaxxer.hikari.HikariDataSource
+import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.env.YamlPropertySourceLoader
@@ -9,13 +10,14 @@ import org.springframework.mock.env.MockEnvironment
 import kotlin.test.assertEquals
 
 /**
- * DB 접속 설정(타임아웃, 비밀번호 기본값)이 의도한 값으로 적용됐는지 확인한다.
- * 타임아웃은 DB가 멈추는 장애가 나야 효과가 드러나서 평소에는 값이 맞는지 알 수 없다. 게다가 Spring Boot는 설정 키를 잘못 적어도
- * (오타, 잘못된 경로) 모르는 키를 오류 없이 무시하고(@ConfigurationProperties의 기본 동작) 라이브러리 기본값으로 뜨므로, 값이 커넥션 풀에 실제로 들어갔는지를 여기서 못 박는다.
+ * DB 접속 설정(타임아웃, 연결 재시도, 비밀번호 기본값)이 의도한 값으로 적용됐는지 확인한다.
+ * 타임아웃은 DB가 멈추는 장애가 나야 효과가 드러나고 재시도는 DB가 앱보다 늦게 떠야 드러나서, 평소에는 값이 맞는지 알 수 없다. 게다가 Spring Boot는 설정 키를 잘못 적어도
+ * (오타, 잘못된 경로) 모르는 키를 오류 없이 무시하고(@ConfigurationProperties의 기본 동작) 라이브러리 기본값으로 뜨므로, 값이 커넥션 풀과 Flyway에 실제로 들어갔는지를 여기서 못 박는다.
  */
 @IntegrationTest
 class DataSourceSettingsTest(
 	@Autowired private val dataSource: HikariDataSource,
+	@Autowired private val flyway: Flyway,
 ) {
 	@Test
 	fun `풀에서 커넥션을 기다리는 최대 시간은 3초다`() {
@@ -37,6 +39,13 @@ class DataSourceSettingsTest(
 		dataSource.connection.use { connection ->
 			assertEquals(30_000, connection.networkTimeout)
 		}
+	}
+
+	@Test
+	fun `Flyway는 DB에 연결하지 못하면 7번까지 다시 시도하고 대기 시간의 상한은 10초다`() {
+		// Flyway의 기본값은 재시도 0번이라서, DB가 앱보다 늦게 뜨면 마이그레이션이 바로 실패해 앱이 죽는다. 두 값 모두 Flyway 설정에는 초 단위 정수로 들어간다
+		assertEquals(7, flyway.configuration.connectRetries)
+		assertEquals(10, flyway.configuration.connectRetriesInterval)
 	}
 
 	@Test
