@@ -50,7 +50,7 @@ curl localhost:8080/api/v1/urls/$CODE
 | `SHORTENER_CACHE_TTL` | `24h` |
 
 `DB_PASSWORD`는 개발용 기본값을 두지 않았다. 빠뜨리면 앱이 시작 단계에서 인증 오류로 죽는다 (compose는 항상 넘겨 주고, Testcontainers를 쓰는 테스트와 `bootTestRun`은 접속 정보를 직접 넣는다).
-시작할 때 DB에 연결하지 못하면 앱이 약 53초 동안 다시 시도하므로(`spring.flyway.connect-retries`), DB가 앱보다 늦게 떠도 앱은 죽지 않고 기다린다. 대신 비밀번호가 틀리거나 빠진 경우에도 그만큼 지난 뒤에야 죽는다.
+시작할 때 DB에 연결하지 못하면 앱이 최대 약 53초 동안 다시 시도한다(`spring.flyway.connect-retries`). DB가 그 안에 뜨면 앱은 죽지 않고 붙는다. 더 늦게 뜨면(예: 새 클러스터에서 PostgreSQL 이미지를 느리게 받을 때) 앱이 죽고 Kubernetes가 컨테이너를 재시작한다. 비밀번호가 틀리거나 빠진 경우에도 약 53초가 지난 뒤에야 죽는다.
 
 Kubernetes에서는 `MANAGEMENT_SERVER_PORT=8081`을 주입해 위의 운영 엔드포인트(`/actuator/**`)를 앱 포트(8080)와 다른 8081 포트로 옮긴다.
 

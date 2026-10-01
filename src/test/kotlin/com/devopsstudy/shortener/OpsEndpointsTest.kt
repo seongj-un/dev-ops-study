@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.post
 import tools.jackson.databind.json.JsonMapper
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 @IntegrationTest
@@ -82,9 +83,10 @@ class OpsEndpointsTest(
 		}.andReturn().response.contentAsString
 
 		// 시계열 하나(uri 하나)의 버킷 경계(le 레이블 값)만 모은다
+		val leLabel = Regex("""le="([^"]+)"""")
 		val upperBounds = body.lines()
 			.filter { it.startsWith("http_server_requests_seconds_bucket{") && it.contains("uri=\"/api/v1/urls/{code}\"") }
-			.map { Regex("""le="([^"]+)"""").find(it)!!.groupValues[1] }
+			.map { assertNotNull(leLabel.find(it), "버킷 줄에 le 레이블이 없다: $it").groupValues[1] }
 			.toSet()
 
 		// Prometheus가 "300ms 이하" 요청 수를 정확히 세려면 경계가 0.3초인 버킷이 있어야 한다 (히스토그램 기본 버킷에는 0.3초가 없다)
