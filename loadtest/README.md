@@ -36,7 +36,7 @@ docker run --rm \
   $K6_IMAGE run /scripts/smoke.js
 ```
 
-**부하 테스트.** 처음에는 낮게 시작한다 (최대 10 req/s, 유지 1분).
+**부하 테스트.** 처음에는 dev에서 낮게 시작한다 (최대 10 req/s, 유지 1분). dev에서 괜찮으면 같은 값으로 prod에서 한 번 더 보고, 그다음에 기본값으로 올린다.
 
 ```bash
 docker run --rm \
@@ -69,11 +69,11 @@ docker run --rm \
 | `MAX_VUS` | `100` | k6가 동시에 쓸 VU(동시 요청)의 상한. 서버가 느려져 요청이 쌓여도 이 수를 넘기지 않는다. 미리 띄워 두는 VU는 최대 요청률만큼(최소 20개)이다. k6 컨테이너는 VU 100개에서도 메모리를 약 50MiB 쓴다 |
 | `SUMMARY_PATH` | `/results/summary.json` | 요약 JSON을 쓸 컨테이너 안의 경로. `/results`가 맥의 `loadtest/results`에 마운트되어 있어야 파일이 남는다. 마운트를 빠뜨리면 `failed to handle the end-of-test summary` 오류만 나오고 파일은 없다 |
 
-`load.js`는 시작할 때 `setup()`에서 코드 30개를 미리 만들고, GET은 그 코드와 실행 중에 만든 코드를 섞어서 조회한다. 조회마다 `Location`이 처음 넣은 URL과 같은지도 확인한다. 반복 하나가 요청 하나라서 `PEAK_RPS`는 곧 초당 요청 수다.
+`load.js`는 시작할 때 `setup()`에서 코드 30개를 미리 만들고, GET은 그 시드 코드와 "그 VU가 실행 중에 직접 만든 코드"를 섞어서 조회한다. VU끼리는 메모리를 공유하지 않으므로 다른 VU가 만든 코드는 모르고, VU마다 최근 500개만 기억한다. 시드 생성이 일부 실패해도 성공한 것이 하나라도 있으면 그것으로 진행하고(실패 수는 경고로 남긴다), 하나도 없을 때만 멈춘다. 조회마다 `Location`이 처음 넣은 URL과 같은지도 확인한다. 반복 하나가 요청 하나라서 `PEAK_RPS`는 곧 초당 요청 수다.
 
 ## 기본값을 이렇게 잡은 이유
 
-- **최대 50 req/s.** 대상 노드는 vCPU 2개짜리 한 대이고 dev, prod, ArgoCD, 모니터링이 나눠 쓴다. 노드를 포화시키지 않으면서 앱 CPU는 눈에 띄게 올리는 수준으로 잡았다. 로컬(Apple 실리콘의 Docker)에서 50 req/s를 걸었더니 앱 컨테이너가 코어의 10~20%(요청당 2~4ms)를 썼다. JIT가 데워지는 처음 1분은 약 20%, 몇 분 뒤에는 약 10%였다. EC2의 vCPU는 이보다 느리다. prod의 HPA는 파드 CPU가 요청(100m)의 70%(70m)를 넘으면 늘리는데, 이 부하는 파드 하나의 목표를 넘으므로 파드가 2~3개로 늘 것이다. 이 값들은 EC2에서 재지 않은 추정이라서, 첫 실행은 `PEAK_RPS=10`으로 하고 `kubectl top`으로 보면서 올린다. 이 노드에서는 더 올려도 얻는 게 적고 모니터링과 ArgoCD만 압박한다.
+- **최대 50 req/s.** 대상 노드는 vCPU 2개짜리 한 대이고 dev, prod, ArgoCD, 모니터링이 나눠 쓴다. 노드를 포화시키지 않으면서 앱 CPU는 눈에 띄게 올리는 수준으로 잡았다. 로컬(Apple 실리콘의 Docker)에서 50 req/s를 걸었더니 앱 컨테이너가 코어의 10~20%(요청당 2~4ms)를 썼다. JIT가 데워지는 처음 1분은 약 20%, 몇 분 뒤에는 약 10%였다. EC2의 vCPU는 이보다 느리다. prod의 HPA는 파드들의 평균 CPU가 요청(100m)의 70%(70m)를 넘으면 늘리는데 허용 오차 10%가 있어서 실제로는 약 77m를 넘어야 움직인다. 로컬 값으로 보면 파드 하나가 이 선을 넘으므로 파드가 늘 것으로 예상하지만, 최소 파드가 2개이면 50 req/s에서도 2개에 머물 수 있다(예상일 뿐 재지 않았다). 이 값들은 EC2에서 재지 않은 추정이라서, 첫 실행은 `PEAK_RPS=10`으로 하고 `kubectl top`으로 보면서 올린다. 이 노드에서는 더 올려도 얻는 게 적고 모니터링과 ArgoCD만 압박한다.
 - **요청률로 조절(ramping-arrival-rate).** VU 수로 조절하면 서버가 느려질 때 VU가 응답을 기다리느라 요청률도 같이 떨어져서, 느려졌을 때의 지연이 실제보다 좋게 보인다. 요청률을 고정하면 느려짐이 그대로 드러나고, 못 따라가면 `dropped_iterations`로 보인다.
 - **올리기 2분 + 유지 5분.** HPA가 CPU를 보고 파드를 늘리고 새 파드의 JVM이 뜨기까지(startupProbe 최대 120초) 걸리는 시간을 지켜볼 수 있고, 유지 구간이 SLO 규칙의 가장 짧은 창(5분)을 채운다.
 
@@ -125,11 +125,21 @@ k6의 지연은 맥에서 잰 값이라 인터넷 왕복이 들어 있다. 서�
 - **데이터가 남는다.** 생성 요청은 실제 행을 만든다 (삭제 API는 없다). 기본값으로 한 번 돌리면 약 3천8백 행이다. 원본 URL이 모두 `https://example.com/k6/`로 시작해서 필요하면 지울 수 있다 (Redis 캐시는 24시간 뒤 사라진다).
 
   ```bash
+  # prod
   kubectl -n shortener-prod exec shortener-prod-postgresql-0 -c postgresql -- \
+    psql -U shortener -d shortener -c "DELETE FROM short_url WHERE original_url LIKE 'https://example.com/k6/%'"
+  # dev
+  kubectl -n shortener-dev exec shortener-dev-postgresql-0 -c postgresql -- \
     psql -U shortener -d shortener -c "DELETE FROM short_url WHERE original_url LIKE 'https://example.com/k6/%'"
   ```
 
+  (파드 이름은 차트의 이름 규칙에서 유추한 것이다. 안 맞으면 `kubectl -n <네임스페이스> get pods`로 확인한다.)
+
 - **인스턴스가 꺼져 있으면** (이 프로젝트는 클러스터 작업이 없을 때 EC2를 멈춰 둔다) `smoke.js`는 요청이 모두 실패해서 종료 코드 99로 끝나고, `load.js`는 setup에서 약 10초 뒤 멈춘다 (종료 코드 108).
+
+## k6 이미지 digest 올리기
+
+digest는 이 README에만 있어서 Dependabot이 갱신해 주지 않는다. 올릴 때는 새 태그의 인덱스 digest를 구해(`docker buildx imagetools inspect grafana/k6:<새 버전>`의 맨 위 `Digest:`) 위 `K6_IMAGE`의 태그와 digest를 함께 바꾸고, 아래 `inspect`로 스크립트가 새 버전에서 읽히는지 확인한다. k6는 메이저 버전에서 요약 형식이 바뀐 적이 있어서(`handleSummary`의 `data`), 올린 뒤 짧게 한 번 돌려 요약 파일을 확인한다.
 
 ## 스크립트를 고쳤을 때
 
@@ -139,10 +149,15 @@ k6의 지연은 맥에서 잰 값이라 인터넷 왕복이 들어 있다. 서�
 # 문법과 옵션만 확인한다 (스크립트를 읽고 옵션을 풀어 출력할 뿐 요청은 없다)
 docker run --rm -v "$PWD/loadtest:/scripts:ro" $K6_IMAGE inspect /scripts/load.js
 
-# 로컬 compose 앱에 짧게 돌려 본다
+# 로컬 compose 앱에 짧게 돌려 본다. 무겁다: 앱 이미지를 빌드하고(Gradle), 앱·PostgreSQL·Redis를 띄운다.
+# compose에는 healthcheck가 앱에 없어서 up -d가 앱이 준비되기 전에 돌아온다(--wait도 소용없다).
+# 그때 k6를 돌리면 setup에서 종료 코드 108로 멈추므로, 앱이 뜰 때까지 기다린다. compose는 8080만 열고 actuator도 그 포트에 있다.
 docker compose up -d --build
+until curl -sf localhost:8080/actuator/health >/dev/null; do sleep 2; done
 docker run --rm -e PEAK_RPS=10 -e RAMP_UP=5s -e HOLD=10s -e RAMP_DOWN=5s \
   -v "$PWD/loadtest:/scripts:ro" -v "$PWD/loadtest/results:/results" \
   $K6_IMAGE run /scripts/load.js
 docker compose down
 ```
+
+이 로컬 순서는 이미지를 빌드해서 무겁다. 작성 당시에는 실행해 보지 않았다(같은 앱 이미지를 담은 별도 스택으로 검증했다).

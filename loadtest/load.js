@@ -62,7 +62,13 @@ export const options = {
   },
   thresholds: {
     // 요청의 99% 이상이 성공해야 한다 (SLO의 가용성 목표 99.5%보다 느슨하다: 올리는 구간과 새 파드가 뜨는 동안의 오류를 감안한다)
-    http_req_failed: ['rate<0.01'],
+    http_req_failed: [
+      // 보고용 합격선: 실행이 끝난 뒤 1% 미만인지 본다. 어겨도 실행은 끝까지 간다.
+      'rate<0.01',
+      // 안전장치: 망가진 대상에 계속 부하를 걸지 않도록, 시작 30초 뒤부터 실패율이 20%를 넘으면 실행 스스로 멈춘다(종료 코드 99).
+      // 누적 비율이라 짧은 장애에는 안 걸리고, 처음부터 대부분 실패하는 경우를 잡는다. 1% 선과 따로 둔 이유는 평소의 합격 판정을 흐리지 않기 위해서다.
+      { threshold: 'rate<0.2', abortOnFail: true, delayAbortEval: '30s' },
+    ],
     // 리다이렉트의 p95가 300ms 안이어야 한다. 300ms는 앱의 지연 SLO와 같은 경계다.
     'http_req_duration{type:redirect}': ['p(95)<300'],
     // 생성도 따로 본다. DB에 쓰고 커밋까지 하는 경로라 리다이렉트보다 여유를 둔다.
@@ -81,19 +87,28 @@ export function setup() {
   // 이 실행의 표식. 원본 URL에 넣어서, 나중에 DB에서 이 실행이 만든 행을 찾아 지울 수 있게 한다.
   const runId = Date.now().toString(36);
   const codes = [];
+  let failed = 0;
+  let lastFailure = '';
   for (let i = 0; i < SEED_COUNT; i++) {
     const url = `https://example.com/k6/${runId}/seed-${i}`;
     // type을 setup으로 바꿔서 실행 중의 생성(type:create) 통계에 섞이지 않게 한다
     const res = createShortUrl(url, { type: 'setup' });
     const code = codeOf(res);
     if (code === null) {
-      // 시드조차 못 만드는 대상에는 부하를 걸지 않고 여기서 멈춘다
-      exec.test.abort(
-        `setup 실패: POST ${BASE_URL}/api/v1/urls 가 ${res.status === 0 ? `응답 없음(${res.error})` : `상태 ${res.status}`}. ` +
-          'BASE_URL이 맞는지, 대상이 떠 있는지 smoke.js로 먼저 확인한다.',
-      );
+      // 장애 주입 중(오류율 0.5 등)이나 DB가 막힌 훈련 중에도 부하를 시작할 수 있어야 하므로, 시드 하나가 실패했다고 멈추지 않는다.
+      failed++;
+      lastFailure = res.status === 0 ? `응답 없음(${res.error})` : `상태 ${res.status}`;
+      continue;
     }
     codes.push({ code, url });
+  }
+  if (failed > 0) console.warn(`setup: 시드 ${SEED_COUNT}개 중 ${failed}개 생성 실패(마지막 원인: ${lastFailure}). 성공한 ${codes.length}개로 진행한다.`);
+  if (codes.length === 0) {
+    // 하나도 못 만드는 대상에는 부하를 걸지 않고 여기서 멈춘다
+    exec.test.abort(
+      `setup 실패: 시드 ${SEED_COUNT}개를 모두 만들지 못했다(마지막 원인: ${lastFailure}). POST ${BASE_URL}/api/v1/urls. ` +
+        'BASE_URL이 맞는지, 대상이 떠 있는지 smoke.js로 먼저 확인한다.',
+    );
   }
   return { runId, codes };
 }
@@ -172,6 +187,16 @@ function textReport(data) {
   lines.push(
     `  실패율 ${failed === undefined ? '-' : (failed * 100).toFixed(2)}%  checks 통과 ${checks === undefined ? '-' : (checks * 100).toFixed(2)}%  dropped_iterations ${droppedText}`,
   );
+  const failedChecks = [];
+  const walk = (group) => {
+    for (const c of group.checks || []) if (c.fails > 0) failedChecks.push(`${c.name} (실패 ${c.fails}/${c.passes + c.fails})`);
+    for (const g of group.groups || []) walk(g);
+  };
+  if (data.root_group) walk(data.root_group);
+  if (failedChecks.length > 0) {
+    lines.push('실패한 checks (전체 목록: jq \'.root_group.checks\' 요약 파일)');
+    for (const f of failedChecks) lines.push(`  ✗ ${f}`);
+  }
   lines.push('임계값');
   for (const name of Object.keys(data.metrics).sort()) {
     const thresholds = data.metrics[name].thresholds || {};
