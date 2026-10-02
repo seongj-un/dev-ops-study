@@ -192,7 +192,7 @@ class FaultInjectionFilterTest {
 	@ParameterizedTest(name = "{0}은 actuator가 아니라서 장애를 낸다")
 	@ValueSource(strings = ["/", "/actuatorx", "/actuator-health", "/api/v1/urls/actuator", "/api/actuator/health", "/Actuator/health"])
 	fun `actuator처럼 보여도 그 경로 아래가 아니면 장애를 낸다`(path: String) {
-		// /actuatorx는 단축 코드로 쓸 수 있는 경로다. 접두어만 보고 건너뛰면 그 코드의 리다이렉트는 장애 대상에서 빠진다
+		// /actuatorx는 RedirectController의 /{code:[0-9a-zA-Z]+}가 일반 앱 요청으로 받는 경로다. 접두어만 보고 건너뛰면 이 요청이 장애 대상에서 빠진다
 		val outcome = send(filter(errorRate = 1.0, draw = 0.0), path = path)
 
 		assertEquals(500, outcome.response.status)

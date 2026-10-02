@@ -21,7 +21,8 @@ import kotlin.test.assertTrue
 /**
  * 쿠버네티스와 같은 배치를 확인한다: 서버를 실제로 띄우고 actuator를 앱과 다른 포트로 옮긴다 (배포 환경은 MANAGEMENT_SERVER_PORT=8081).
  * 비율을 1.0으로 두어 앱 포트의 요청이 전부 장애여도, 관리 포트의 프로브와 메트릭 수집은 영향이 없는지 본다.
- * 프로브가 실패하면 쿠버네티스가 파드를 재시작해서, 카나리 분석은 5xx 비율을 볼 데이터를 잃는다.
+ * startup·liveness·readiness 프로브가 모두 관리 포트를 본다. 실패하면 startup·liveness는 컨테이너 재시작으로, readiness는 파드가 Service 엔드포인트에서 빠져
+ * 트래픽이 끊기는 것으로 이어지고, 어느 쪽이든 카나리 분석이 봐야 할 5xx가 보이지 않는다.
  * MockMvc는 서버가 하나라서 이 배치를 흉내 낼 수 없다.
  */
 @SpringBootTest(

@@ -24,7 +24,8 @@ import java.util.random.RandomGenerator
  *
  * 관리 포트: 포트를 따로 둔 actuator(쿠버네티스에서는 8081)는 Boot가 자식 컨텍스트와 별도 서블릿 컨테이너로 띄우고, 거기에는 앱 컨텍스트의 필터가 등록되지 않는다.
  * 그래서 이 필터를 거치지 않는다(FaultInjectionManagementPortTest). 앱 포트와 합친 경우(로컬 기본)에는 actuator 경로를 직접 건너뛴다.
- * 프로브까지 500이면 쿠버네티스가 파드를 재시작해서, 5xx 비율을 보려던 분석에 데이터가 남지 않는다.
+ * startup·liveness·readiness 프로브가 모두 관리 포트를 본다. 프로브까지 500이면 startup·liveness가 실패해 컨테이너가 재시작되거나,
+ * readiness가 실패해 파드가 Service 엔드포인트에서 빠져 트래픽이 끊긴다. 어느 쪽이든 카나리 분석이 봐야 할 5xx가 보이지 않는다.
  */
 class FaultInjectionFilter(
 	private val errorRate: Double,
@@ -71,7 +72,7 @@ class FaultInjectionFilter(
 			null
 		}
 
-	// 기본 경로(/actuator)와 그 아래만 건너뛴다. "/actuatorx"는 단축 코드로 쓸 수 있는 경로라 장애 대상이다.
+	// 기본 경로(/actuator)와 그 아래만 건너뛴다. "/actuatorx"는 RedirectController의 /{code:[0-9a-zA-Z]+}가 일반 앱 요청으로 받는 경로라 장애 대상이다.
 	// 기본 경로를 /로 옮기면(management.endpoints.web.base-path=/) 접두어로 가를 수 없어서 아무것도 건너뛰지 않는다.
 	private fun isActuator(request: HttpServletRequest): Boolean {
 		if (actuatorBasePath.isEmpty()) return false

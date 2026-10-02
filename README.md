@@ -57,11 +57,11 @@ Kubernetes에서는 `MANAGEMENT_SERVER_PORT=8081`을 주입해 위의 운영 엔
 
 ## 장애 주입 (훈련용)
 
-`SHORTENER_FAULT_ERROR_RATE`(프로퍼티 `shortener.fault.error-rate`)에 0.0~1.0 값을 주면, 앱 포트로 들어온 요청 중 그 비율만큼은 컨트롤러에 닿지 않고 HTTP 500(`application/problem+json`)을 받는다. 기본값은 `0`(꺼짐)이고, 범위를 벗어난 값(음수, 1 초과)이면 앱이 시작 단계에서 죽는다. 배포 환경에서는 설정 저장소 차트의 `fault.errorRate`가 이 변수가 된다.
+`SHORTENER_FAULT_ERROR_RATE`(프로퍼티 `shortener.fault.error-rate`)에 0.0~1.0 값을 주면, 앱 포트로 들어온 요청 중 그 비율만큼은 컨트롤러에 닿지 않고 HTTP 500(`application/problem+json`)을 받는다. 기본값은 `0`(꺼짐)이고, 범위를 벗어난 값(음수, 1 초과)이나 숫자가 아닌 값, 빈 문자열이면 앱이 시작 단계에서 죽는다. 배포 환경에서는 설정 저장소 차트의 `fault.errorRate`가 이 변수가 되는데, 변수가 빈 문자열이면 기본값 `0`이 쓰이지 않고 앱이 죽어 파드가 CrashLoopBackOff에 빠진다. 그래서 차트는 `""`를 절대 넘기면 안 된다(끄려면 `"0"`).
 
 카나리 자동 롤백과 SLO 알림 훈련에서 "나쁜 버전"을 흉내 내는 용도다: 설정 저장소에서 dev의 `fault.errorRate`를 올리는 PR이 곧 나쁜 버전의 배포다. **평소 운영(특히 prod)에서는 켜지 않는다.** 로컬에서는 `SHORTENER_FAULT_ERROR_RATE=0.5 ./gradlew bootTestRun`으로 켜 볼 수 있다.
 
-- 관리 포트(Kubernetes에서는 8081)의 `/actuator/**`는 대상이 아니다. 프로브가 실패하면 Kubernetes가 파드를 재시작해서 카나리 분석이 5xx를 볼 데이터가 사라지기 때문이다. 관리 포트를 따로 두지 않아도(로컬) `/actuator` 경로는 건너뛴다.
+- 관리 포트(Kubernetes에서는 8081)의 `/actuator/**`는 대상이 아니다. startup·liveness·readiness 프로브가 모두 이 포트를 보는데, startup·liveness가 실패하면 컨테이너가 재시작되고 readiness가 실패하면 파드가 Service 엔드포인트에서 빠져 트래픽이 끊긴다. 어느 쪽이든 카나리 분석이 봐야 할 5xx가 보이지 않는다. 관리 포트를 따로 두지 않아도(로컬) `/actuator` 경로는 건너뛴다.
 - 주입한 500은 일반 5xx처럼 `http_server_requests_seconds_count{status="500"}`에 잡힌다. 컨트롤러에 닿기 전에 끊어서 `uri` 레이블은 경로 패턴 대신 `UNKNOWN`이고, SLO 규칙과 대시보드는 `uri!~"/actuator.*"`로만 거르므로 이것도 센다.
 - 장애 한 건마다 카운터 `shortener_fault_injected_total`이 오르고 WARN 로그 한 줄(`fault injected`, `method`·`path` 필드)이 남는다. 켜진 채로 앱이 뜰 때도 WARN 로그 한 줄(`fault injection enabled`)을 남긴다.
 
