@@ -11,13 +11,14 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.core.env.MapPropertySource
 import org.springframework.core.env.StandardEnvironment
 import org.springframework.core.io.ClassPathResource
+import java.time.Duration
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
- * shortener.* 설정이 의도한 값으로 바인딩되고, 범위를 벗어난 장애 주입 비율은 앱이 뜨는 단계에서 막히는지 확인한다.
+ * shortener.* 설정이 의도한 값으로 바인딩되고, 범위를 벗어난 값(장애 주입 비율, 조회수 실행기 크기)은 앱이 뜨는 단계에서 막히는지 확인한다.
  * DB·Redis가 필요 없어서 ShortenerProperties만 올린 가벼운 컨텍스트로 돌린다 (컨테이너를 띄우지 않는다).
  */
 class ShortenerPropertiesTest {
@@ -94,6 +95,27 @@ class ShortenerPropertiesTest {
 		}
 		runnerWithApplicationYml(mapOf("SHORTENER_FAULT_ERROR_RATE" to "-0.1")).run {
 			assertContains(it.failureMessages(), "fault.errorRate")
+		}
+	}
+
+	@Test
+	fun `application_yml의 캐시 cooldown과 조회수 실행기 값은 클래스 기본값과 같다`() {
+		// 단위 테스트는 ShortenerProperties()를 바로 만들어 쓴다. 운영 값(application.yml)과 기본값이 어긋나면 테스트가 운영과 다른 값으로 돈다
+		runnerWithApplicationYml().run {
+			val properties = it.getBean(ShortenerProperties::class.java)
+			assertEquals(Duration.ofSeconds(10), properties.cacheCooldown)
+			assertEquals(ShortenerProperties.Clicks(threads = 2, queueCapacity = 1000, shutdownTimeout = Duration.ofSeconds(3)), properties.clicks)
+			assertEquals(ShortenerProperties().cacheCooldown, properties.cacheCooldown)
+			assertEquals(ShortenerProperties().clicks, properties.clicks)
+		}
+	}
+
+	@ParameterizedTest(name = "shortener.clicks.{0}=0이면 앱이 뜨지 않는다")
+	@ValueSource(strings = ["threads", "queue-capacity"])
+	fun `조회수 실행기의 스레드 수와 대기열 크기는 1 이상이어야 한다`(name: String) {
+		// 0이면 ThreadPoolExecutor·ArrayBlockingQueue가 만들어질 때 IllegalArgumentException으로 죽는데, 어떤 설정이 틀렸는지 드러나지 않는다
+		runner().withPropertyValues("shortener.clicks.$name=0").run {
+			assertContains(it.failureMessages(), "clicks.")
 		}
 	}
 

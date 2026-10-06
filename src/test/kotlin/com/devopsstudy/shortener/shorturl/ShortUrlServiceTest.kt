@@ -13,13 +13,14 @@ import kotlin.test.assertFailsWith
 class ShortUrlServiceTest(
 	@Autowired private val repository: ShortUrlRepository,
 	@Autowired private val cache: UrlCache,
+	@Autowired private val clickRecorder: ClickRecorder,
 	@Autowired private val meterRegistry: MeterRegistry,
 ) {
 	private fun uniqueCode() = UUID.randomUUID().toString().replace("-", "").take(12)
 
 	private fun serviceGenerating(vararg codes: String): ShortUrlService {
 		val next = codes.iterator()
-		return ShortUrlService(repository, ShortCodeGenerator { next.next() }, cache, meterRegistry)
+		return ShortUrlService(repository, ShortCodeGenerator { next.next() }, cache, clickRecorder, meterRegistry)
 	}
 
 	@Test
@@ -42,7 +43,7 @@ class ShortUrlServiceTest(
 		repository.saveAndFlush(ShortUrl(taken, "https://example.com/taken"))
 		// 포기하기까지 생성기를 몇 번 불렀는지 센다: 1~4번 만에 포기하는 구현은 이 테스트를 통과하면 안 된다
 		var attempts = 0
-		val service = ShortUrlService(repository, ShortCodeGenerator { attempts++; taken }, cache, meterRegistry)
+		val service = ShortUrlService(repository, ShortCodeGenerator { attempts++; taken }, cache, clickRecorder, meterRegistry)
 
 		assertFailsWith<IllegalStateException> { service.create("https://example.com/never") }
 		assertEquals(ShortUrlService.MAX_ATTEMPTS, attempts)

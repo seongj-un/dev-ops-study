@@ -29,19 +29,22 @@ class OpsEndpointsTest(
 	}
 
 	@Test
-	fun `readiness 프로브는 DB만 보고 Redis는 보지 않는다`() {
+	fun `readiness 프로브는 앱 자신의 상태만 보고 DB와 Redis는 보지 않는다`() {
+		// DB를 넣으면 DB 장애 때 모든 파드가 함께 NotReady가 되어, 캐시로 답할 수 있던 리다이렉트까지 막힌다 (application.yml 참고)
 		mockMvc.get("/actuator/health/readiness").andExpect {
 			status { isOk() }
 			jsonPath("$.status") { value("UP") }
-			jsonPath("$.components.db.status") { value("UP") }
+			jsonPath("$.components.readinessState.status") { value("UP") }
+			jsonPath("$.components.db") { doesNotExist() }
 			jsonPath("$.components.redis") { doesNotExist() }
 		}
 	}
 
 	@Test
-	fun `전체 health에는 Redis 상태도 나온다`() {
+	fun `전체 health에는 DB와 Redis 상태가 나온다`() {
 		mockMvc.get("/actuator/health").andExpect {
 			status { isOk() }
+			jsonPath("$.components.db.status") { value("UP") }
 			jsonPath("$.components.redis.status") { value("UP") }
 		}
 	}
@@ -71,6 +74,8 @@ class OpsEndpointsTest(
 		assertContains(body, "http_server_requests_seconds_bucket")
 		assertContains(body, "shortener_cache_requests_total")
 		assertContains(body, "shortener_urls_shortened_total")
+		assertContains(body, "shortener_clicks_recorded_total")
+		assertContains(body, "shortener_clicks_dropped_total")
 		assertContains(body, "application=\"shortener\"")
 	}
 
