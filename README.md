@@ -24,7 +24,7 @@ CODE=aB3xY9z  # 위 응답의 "code" 값
 # 리다이렉트 → 302 Location: https://example.com
 curl -i localhost:8080/$CODE
 
-# 조회수 확인
+# 조회수 확인 (조회수는 리다이렉트 응답과 따로 쓰므로 바로 직후에는 아직 반영되지 않았을 수 있다)
 curl localhost:8080/api/v1/urls/$CODE
 ```
 
@@ -33,10 +33,19 @@ curl localhost:8080/api/v1/urls/$CODE
 | 경로 | 용도 |
 |---|---|
 | `/actuator/health/liveness` | 프로세스가 살아 있는지 (죽었으면 재시작 대상) |
-| `/actuator/health/readiness` | 트래픽을 받을 준비가 됐는지 (DB 연결 포함, Redis 제외) |
-| `/actuator/health` | 전체 상태 (DB, Redis 등 구성요소별). Redis가 죽으면 503을 돌려주므로 프로브로 쓰면 안 된다. 프로브에는 위의 liveness/readiness를 쓴다 |
+| `/actuator/health/readiness` | 트래픽을 받을 준비가 됐는지 (앱 자신의 상태만 본다. DB·Redis는 보지 않는다: [장애 때의 동작](#장애-때의-동작)) |
+| `/actuator/health` | 전체 상태 (DB, Redis 등 구성요소별). DB나 Redis가 죽으면 503을 돌려주므로 프로브로 쓰면 안 된다. 프로브에는 위의 liveness/readiness를 쓴다 |
 | `/actuator/info` | 빌드 버전 |
 | `/actuator/prometheus` | Prometheus 메트릭 |
+
+## 장애 때의 동작
+
+5단계 장애 훈련(prod에서 DB와 Redis를 차례로 막아 봤다)에서 드러난 문제를 고쳐서, 의존성 하나가 죽어도 그것 없이 할 수 있는 일은 계속 한다. 값과 그 이유는 `application.yml`의 주석에 있다.
+
+- **Redis가 죽으면**: 응답은 그대로이고 조금 느려질 뿐이다. Redis 호출이 한 번 실패하면 10초(`shortener.cache-cooldown`) 동안 Redis를 부르지 않고 바로 DB에서 읽는다. 그래서 Redis 타임아웃(200ms)을 치르는 요청은 파드마다 10초에 한 번꼴이다. 10초가 지나면 요청 하나만 Redis를 시험해 보고, 돌아왔으면 다시 캐시를 쓴다. 건너뛴 조회는 `shortener_cache_requests_total{result="skipped"}`, 실패는 `result="error"`로 세고, 경고 로그는 10초에 한 줄이다.
+- **PostgreSQL이 죽으면**: readiness 프로브가 DB를 보지 않으므로 파드는 Ready로 남아 계속 트래픽을 받는다. Redis 캐시에 있는 리다이렉트는 계속 302이고, DB가 필요한 요청(캐시에 없는 리다이렉트, 생성, 조회)은 커넥션을 받지 못하면 1초 뒤 500을 받는다. 다만 이미 맺은 커넥션이 응답 없이 멈추면(패킷이 버려지거나 DB가 멈출 때) 커넥션 유효성 검사(최대 5초)나 소켓 타임아웃(30초)까지 기다린 뒤 실패할 수 있다. 이 500은 `http_server_requests_seconds_count{status="500"}`에 남아 SLO 알림이 센다.
+  예전에는 readiness에 DB가 있어서 모든 파드가 함께 NotReady가 됐고, Traefik이 모든 요청에 503을 직접 돌려줘 캐시로 답할 수 있던 리다이렉트까지 막혔으며, 앱 메트릭에는 아무것도 남지 않아 알림도 울리지 않았다.
+- **조회수**: 리다이렉트는 조회수를 DB에 쓰는 것을 기다리지 않는다. 따로 둔 스레드 2개가 크기 1000의 대기열에서 꺼내 쓴다(`shortener.clicks.*`). 그래서 조회 API의 `clickCount`는 조금 늦게 반영되고, 장애 때는 일부를 잃는다. 잃은 수는 `shortener_clicks_dropped_total`의 `reason`으로 센다: 대기열이 차면 `queue_full`, DB 쓰기가 실패하면 `error`(다시 시도하지 않는다), 앱이 종료될 때 3초 안에 다 쓰지 못하면 `shutdown`. 쓴 수는 `shortener_clicks_recorded_total`이다. 프로세스가 강제로 죽으면(SIGKILL, OOM) 대기열에 있던 조회수는 세지도 못하고 사라진다.
 
 ## 설정 (환경 변수)
 

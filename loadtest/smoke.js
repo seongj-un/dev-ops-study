@@ -41,8 +41,13 @@ export default function () {
     'redirect: Location is the original url': (r) => r.headers['Location'] === target,
   });
 
-  // 3) 조회: 리다이렉트가 응답을 돌려주기 전에 DB의 조회수를 올리므로, 방금 한 번 따라갔으니 1이다
-  const stats = getStats(code);
+  // 3) 조회: 방금 한 번 따라갔으니 조회수는 1이 된다. 앱은 조회수를 리다이렉트 응답과 따로(ClickRecorder의 스레드에서) 쓰므로
+  //    응답 직후에는 아직 0일 수 있다. 0이면 0.1초 간격으로 최대 10번 더 묻는다 (보통은 첫 조회에서 이미 1이다).
+  let stats = getStats(code);
+  for (let retry = 0; retry < 10 && stats.status === 200 && jsonField(stats, 'clickCount') === 0; retry++) {
+    sleep(0.1);
+    stats = getStats(code);
+  }
   check(stats, {
     'stats: status 200': (r) => r.status === 200,
     'stats: clickCount is 1': (r) => jsonField(r, 'clickCount') === 1,

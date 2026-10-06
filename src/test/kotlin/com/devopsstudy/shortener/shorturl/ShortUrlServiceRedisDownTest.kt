@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.data.redis.core.StringRedisTemplate
+import java.time.Duration
 import java.util.UUID
 import kotlin.test.assertEquals
 
@@ -20,15 +21,23 @@ class ShortUrlServiceRedisDownTest(
 ) {
 	private val deadRedis = deadRedisConnectionFactory()
 	private val meterRegistry = SimpleMeterRegistry()
+	private val clickRecorder = ClickRecorder(
+		executor = ClickRecorder.boundedExecutor(threads = 1, queueCapacity = 10),
+		write = { code -> repository.incrementClickCount(code) },
+		meterRegistry = meterRegistry,
+		shutdownTimeout = Duration.ofSeconds(10),
+	)
 	private val service = ShortUrlService(
 		repository,
 		Base62ShortCodeGenerator(),
 		UrlCache(StringRedisTemplate(deadRedis), ShortenerProperties(), meterRegistry),
+		clickRecorder,
 		meterRegistry,
 	)
 
 	@AfterEach
 	fun tearDown() {
+		clickRecorder.close()
 		deadRedis.destroy()
 	}
 
@@ -40,8 +49,12 @@ class ShortUrlServiceRedisDownTest(
 		assertEquals("https://example.com/redis-down", service.resolve(code))
 		assertEquals("https://example.com/redis-down", service.resolve(code))
 
+		// 조회수는 따로 도는 스레드가 쓴다. close()가 대기열이 빌 때까지 기다린다
+		clickRecorder.close()
 		assertEquals(2L, repository.findByCode(code)?.clickCount)
-		// 리다이렉트마다 캐시 조회(get)와 캐시 저장(put)이 둘 다 실패한다. Redis가 응답 없이 멈추면 이 두 번이 각각 타임아웃까지 기다린다
-		assertEquals(4.0, meterRegistry.counter(UrlCache.METRIC, "result", "error").count())
+		// 첫 리다이렉트의 캐시 조회(get)만 Redis까지 가서 실패한다. 그 뒤로는 cooldown(10초) 동안 Redis를 부르지 않는다:
+		// 같은 요청의 캐시 저장(put)은 그냥 건너뛰고, 두 번째 리다이렉트의 get은 건너뛴 조회(skipped)로 센다
+		assertEquals(1.0, meterRegistry.counter(UrlCache.METRIC, "result", "error").count())
+		assertEquals(1.0, meterRegistry.counter(UrlCache.METRIC, "result", "skipped").count())
 	}
 }

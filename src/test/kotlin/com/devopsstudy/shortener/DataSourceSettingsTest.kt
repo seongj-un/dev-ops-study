@@ -20,9 +20,9 @@ class DataSourceSettingsTest(
 	@Autowired private val flyway: Flyway,
 ) {
 	@Test
-	fun `풀에서 커넥션을 기다리는 최대 시간은 3초다`() {
+	fun `풀에서 커넥션을 기다리는 최대 시간은 1초다`() {
 		// Hikari의 connectionTimeout은 밀리초 단위다 (기본값은 30000)
-		assertEquals(3_000L, dataSource.connectionTimeout)
+		assertEquals(1_000L, dataSource.connectionTimeout)
 	}
 
 	@Test

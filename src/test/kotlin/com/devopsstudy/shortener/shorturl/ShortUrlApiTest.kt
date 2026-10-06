@@ -2,6 +2,7 @@ package com.devopsstudy.shortener.shorturl
 
 import com.devopsstudy.shortener.IntegrationTest
 import com.jayway.jsonpath.JsonPath
+import org.awaitility.Awaitility.await
 import org.hamcrest.Matchers.matchesPattern
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -10,6 +11,7 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
@@ -134,12 +136,15 @@ class ShortUrlApiTest(
 
 		repeat(2) { mockMvc.get("/$code").andExpect { status { isFound() } } }
 
-		mockMvc.get("/api/v1/urls/$code").andExpect {
-			status { isOk() }
-			jsonPath("$.code") { value(code) }
-			jsonPath("$.shortUrl") { value("http://localhost:8080/$code") }
-			jsonPath("$.originalUrl") { value("https://example.com/count") }
-			jsonPath("$.clickCount") { value(2) }
+		// 조회수는 리다이렉트 응답과 따로(ClickRecorder의 스레드에서) 쓰므로 응답 직후에는 아직 반영되지 않았을 수 있다. 반영될 때까지 기다린다
+		await().atMost(Duration.ofSeconds(5)).untilAsserted {
+			mockMvc.get("/api/v1/urls/$code").andExpect {
+				status { isOk() }
+				jsonPath("$.code") { value(code) }
+				jsonPath("$.shortUrl") { value("http://localhost:8080/$code") }
+				jsonPath("$.originalUrl") { value("https://example.com/count") }
+				jsonPath("$.clickCount") { value(2) }
+			}
 		}
 	}
 

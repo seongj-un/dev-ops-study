@@ -12,6 +12,7 @@ class ShortUrlService(
 	private val repository: ShortUrlRepository,
 	private val codeGenerator: ShortCodeGenerator,
 	private val cache: UrlCache,
+	private val clickRecorder: ClickRecorder,
 	meterRegistry: MeterRegistry,
 ) {
 	private val log = LoggerFactory.getLogger(javaClass)
@@ -41,11 +42,14 @@ class ShortUrlService(
 		throw IllegalStateException("could not generate a unique short code after $MAX_ATTEMPTS attempts")
 	}
 
-	/** 원본 URL을 돌려주고 조회수를 1 올린다. 원본 URL은 Redis에서 먼저 찾고, 없으면 DB에서 읽어 캐시에 넣는다. */
+	/**
+	 * 원본 URL을 돌려주고 조회수를 1 올린다. 원본 URL은 Redis에서 먼저 찾고, 없으면 DB에서 읽어 캐시에 넣는다.
+	 * 조회수는 ClickRecorder에 맡기고 기다리지 않는다. 그래서 캐시에 있으면 DB가 죽어도 원본 URL을 돌려준다 (캐시에 없으면 DB를 읽다 실패해 500이 된다).
+	 */
 	fun resolve(code: String): String {
 		val originalUrl = cache.get(code)
 			?: get(code).originalUrl.also { cache.put(code, it) }
-		repository.incrementClickCount(code)
+		clickRecorder.record(code)
 		redirectCounter.increment()
 		return originalUrl
 	}
