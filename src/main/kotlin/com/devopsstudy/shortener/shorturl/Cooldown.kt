@@ -31,6 +31,9 @@ internal class Cooldown(duration: Duration, timeSource: TimeSource) {
 		return !skipUntil.compareAndSet(until, now + durationNanos)
 	}
 
+	/**
+	 * 성공하면 창을 닫는다. 실패보다 먼저 시작해 늦게 성공한 호출도 막 열린 창을 닫을 수 있어서, Redis가 일부만 망가졌을 때는 타임아웃을 창(duration)마다 한 번보다 자주 치를 수 있다. 받아들이는 대가다.
+	 */
 	fun onSuccess() {
 		// 평소(닫힘)에는 읽기만 하고 쓰지 않는다
 		if (skipUntil.get() != CLOSED) skipUntil.set(CLOSED)

@@ -21,7 +21,7 @@ import kotlin.time.TimeSource
  * - error: DB 쓰기가 실패했다. 다시 시도하지 않는다 (DB 장애 중에 다시 시도하면 대기열만 더 밀린다).
  * - shutdown: 앱이 종료될 때 shutdownTimeout 안에 다 쓰지 못했다 (close 참고).
  * 프로세스가 강제로 죽으면(SIGKILL, OOM) 대기열에 있던 조회수는 세지도 못하고 사라진다.
- * 그래서 shortener.redirects = recorded + dropped + (대기열에 남은 수)이고, 강제 종료가 없었다면 대기열이 빈 뒤에는 앞의 둘의 합과 같다.
+ * 그래서 shortener.redirects = recorded + dropped + 대기열 + 쓰는 중이고, 강제 종료가 없었다면 대기열이 비고 쓰는 중인 것이 끝난 뒤에는 앞의 둘의 합과 같다.
  */
 class ClickRecorder(
 	private val executor: ExecutorService,

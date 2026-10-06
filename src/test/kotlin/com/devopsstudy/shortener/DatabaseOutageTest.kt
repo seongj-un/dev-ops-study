@@ -96,7 +96,8 @@ class DatabaseOutageTest(
 
 	private fun breakDatabase() {
 		allowConnections(false)
-		admin("select pg_terminate_backend(pid) from pg_stat_activity where datname = '${postgres.databaseName}'")
+		// 두 번째 인자(ms)를 주면 백엔드가 실제로 끝날 때까지 기다린다(PostgreSQL 14+). 끊기 직전에 시작한 조회수 쓰기가 "장애" 뒤에 성공하지 않게 한다
+		admin("select pg_terminate_backend(pid, 5000) from pg_stat_activity where datname = '${postgres.databaseName}'")
 	}
 
 	@Test
@@ -134,7 +135,8 @@ class DatabaseOutageTest(
 
 		allowConnections(true)
 
-		// DB가 돌아오면 Hikari가 새 커넥션을 맺어 캐시에 없던 리다이렉트도 다시 된다
-		await().atMost(Duration.ofSeconds(10)).untilAsserted { assertEquals(302, send("/$uncachedCode").statusCode()) }
+		// DB가 돌아오면 Hikari가 새 커넥션을 맺어 캐시에 없던 리다이렉트도 다시 된다.
+		// 장애 동안 Hikari의 새 연결 재시도 간격이 약 5초까지 늘어나고, 그동안 한 번 확인할 때마다 1초(커넥션 대기)가 걸리므로 넉넉히 기다린다
+		await().atMost(Duration.ofSeconds(30)).untilAsserted { assertEquals(302, send("/$uncachedCode").statusCode()) }
 	}
 }
