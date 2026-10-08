@@ -117,6 +117,25 @@ class UrlCacheCooldownTest {
 	}
 
 	@Test
+	fun `실패보다 먼저 시작해 늦게 성공한 get은 방금 열린 창을 닫지 못한다`() {
+		redis.store["${UrlCache.KEY_PREFIX}abc1234"] = "https://example.com/a"
+		// get이 Redis 안에서 기다리는 동안 다른 요청의 put이 실패해 창을 연다. 기다리던 get은 그 뒤에 성공한다
+		redis.beforeCommand = {
+			redis.beforeCommand = {}
+			time += 1.seconds
+			redis.down = true
+			cache.put("other12", "https://example.com/b")
+			redis.down = false
+		}
+
+		assertEquals("https://example.com/a", cache.get("abc1234"), "늦게라도 성공한 get의 결과는 쓴다")
+
+		assertNull(cache.get("abc1234"), "그래도 창은 닫히지 않아 다음 조회는 건너뛴다")
+		assertEquals(2, redis.calls.get())
+		assertEquals(1.0, count("skipped"))
+	}
+
+	@Test
 	fun `경고 로그는 창마다 한 줄이고 그사이 더 난 실패 수를 suppressed로 남긴다`() {
 		// Redis가 멈춘 순간에 이미 Redis를 기다리던 요청 두 개를 만든다: 둘 다 Redis에 들어온 뒤에야 함께 실패한다
 		redis.down = true

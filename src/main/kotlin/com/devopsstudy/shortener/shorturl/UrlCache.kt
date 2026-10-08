@@ -38,11 +38,13 @@ class UrlCache(
 			skipped.increment()
 			return null
 		}
+		// 시작 시각을 Redis를 부르기 전에 재야, 이 호출보다 먼저 난 실패가 연 창을 이 호출의 늦은 성공이 닫지 못한다
+		val startedAt = cooldown.mark()
 		return try {
 			redis.opsForValue().get(key(code))
 				.also {
 					if (it == null) misses.increment() else hits.increment()
-					cooldown.onSuccess()
+					cooldown.onSuccess(startedAt)
 				}
 		} catch (e: DataAccessException) {
 			fail(code, e, "redis get failed, falling back to db")
@@ -52,9 +54,10 @@ class UrlCache(
 
 	fun put(code: String, originalUrl: String) {
 		if (cooldown.shouldSkip()) return
+		val startedAt = cooldown.mark()
 		try {
 			redis.opsForValue().set(key(code), originalUrl, properties.cacheTtl)
-			cooldown.onSuccess()
+			cooldown.onSuccess(startedAt)
 		} catch (e: DataAccessException) {
 			fail(code, e, "redis put failed")
 		}
