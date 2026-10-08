@@ -26,18 +26,25 @@ class DataSourceSettingsTest(
 	}
 
 	@Test
-	fun `pgjdbc 연결 타임아웃 5초와 소켓 타임아웃 30초가 드라이버 속성으로 넘어간다`() {
-		// pgjdbc 속성은 초 단위다. Hikari는 dataSourceProperties를 커넥션을 맺을 때 드라이버에 그대로 넘긴다
-		assertEquals("5", dataSource.dataSourceProperties.getProperty("connectTimeout"))
-		assertEquals("30", dataSource.dataSourceProperties.getProperty("socketTimeout"))
+	fun `커넥션을 내주기 전 유효성 검사는 1초까지만 기다리고 놀고 있는 커넥션은 30초마다 확인한다`() {
+		// Hikari의 validationTimeout(기본 5초)과 keepaliveTime(기본 0, 꺼짐)은 밀리초 단위다. 30초보다 짧은 keepaliveTime은 Hikari가 경고만 남기고 꺼 버리므로 값이 적용됐는지 확인해 둔다
+		assertEquals(1_000L, dataSource.validationTimeout)
+		assertEquals(30_000L, dataSource.keepaliveTime)
 	}
 
 	@Test
-	fun `실제로 맺은 커넥션에 pgjdbc의 소켓 타임아웃 30초가 걸려 있다`() {
+	fun `pgjdbc 연결 타임아웃 5초와 소켓 타임아웃 10초가 드라이버 속성으로 넘어간다`() {
+		// pgjdbc 속성은 초 단위다. Hikari는 dataSourceProperties를 커넥션을 맺을 때 드라이버에 그대로 넘긴다
+		assertEquals("5", dataSource.dataSourceProperties.getProperty("connectTimeout"))
+		assertEquals("10", dataSource.dataSourceProperties.getProperty("socketTimeout"))
+	}
+
+	@Test
+	fun `실제로 맺은 커넥션에 pgjdbc의 소켓 타임아웃 10초가 걸려 있다`() {
 		// pgjdbc는 이름이 틀린 속성(대소문자 포함)을 오류 없이 무시한다. 그래서 속성 맵에 값이 들어 있다는 것만으로는 드라이버가 그 값을 썼다는 증거가 못 되고,
 		// 실제로 맺은 커넥션에서 직접 읽어야 한다. JDBC의 networkTimeout은 밀리초 단위이고, pgjdbc는 소켓 읽기 타임아웃(socketTimeout)을 여기로 돌려준다
 		dataSource.connection.use { connection ->
-			assertEquals(30_000, connection.networkTimeout)
+			assertEquals(10_000, connection.networkTimeout)
 		}
 	}
 

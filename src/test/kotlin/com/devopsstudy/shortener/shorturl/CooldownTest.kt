@@ -15,7 +15,7 @@ class CooldownTest {
 	@Test
 	fun `실패한 적이 없으면 건너뛰지 않는다`() {
 		assertFalse(cooldown.shouldSkip())
-		cooldown.onSuccess()
+		cooldown.onSuccess(cooldown.mark())
 		assertFalse(cooldown.shouldSkip())
 	}
 
@@ -44,8 +44,9 @@ class CooldownTest {
 		cooldown.onFailure()
 		time += 10.seconds
 		cooldown.shouldSkip()
+		val startedAt = cooldown.mark()
 
-		cooldown.onSuccess()
+		cooldown.onSuccess(startedAt)
 
 		assertFalse(cooldown.shouldSkip())
 		assertFalse(cooldown.shouldSkip())
@@ -76,5 +77,69 @@ class CooldownTest {
 		time += 10.seconds
 
 		assertFalse(cooldown.shouldSkip())
+	}
+
+	@Test
+	fun `실패보다 먼저 시작해 늦게 성공한 호출은 방금 열린 창을 닫지 못한다`() {
+		val startedAt = cooldown.mark()
+		time += 100.milliseconds
+		cooldown.onFailure()
+		time += 100.milliseconds
+
+		cooldown.onSuccess(startedAt)
+
+		assertTrue(cooldown.shouldSkip(), "창은 그대로 열려 있다")
+		time += 9.seconds + 899.milliseconds
+		assertTrue(cooldown.shouldSkip(), "실패한 때부터 10초가 되기 1ms 전")
+		time += 1.milliseconds
+		assertFalse(cooldown.shouldSkip(), "10초가 되면 시험 호출")
+	}
+
+	@Test
+	fun `창이 열린 뒤에 시작한 호출이 성공하면 창이 닫힌다`() {
+		cooldown.onFailure()
+		time += 1.seconds
+		val startedAt = cooldown.mark()
+
+		cooldown.onSuccess(startedAt)
+
+		assertFalse(cooldown.shouldSkip())
+	}
+
+	@Test
+	fun `실패와 같은 시각에 시작한 호출의 성공은 창을 닫는다`() {
+		cooldown.onFailure()
+
+		cooldown.onSuccess(cooldown.mark())
+
+		assertFalse(cooldown.shouldSkip())
+	}
+
+	@Test
+	fun `시험 호출이 창을 미뤄도 열린 시각은 그대로라서 그 전에 시작한 호출의 늦은 성공은 여전히 닫지 못한다`() {
+		val early = cooldown.mark()
+		time += 1.seconds
+		cooldown.onFailure()
+		time += 10.seconds
+		assertFalse(cooldown.shouldSkip(), "시험 호출")
+
+		cooldown.onSuccess(early)
+
+		assertTrue(cooldown.shouldSkip(), "시험 호출 결과가 나오기 전이라 창은 미뤄진 채로 남는다")
+	}
+
+	@Test
+	fun `실패가 다시 창을 열면 그 전에 시작한 시험 호출의 성공은 새 창을 닫지 못한다`() {
+		cooldown.onFailure()
+		time += 10.seconds
+		cooldown.shouldSkip()
+		val probeStartedAt = cooldown.mark()
+		time += 100.milliseconds
+		// 시험 호출이 도는 동안 다른 호출이 실패했다
+		cooldown.onFailure()
+
+		cooldown.onSuccess(probeStartedAt)
+
+		assertTrue(cooldown.shouldSkip())
 	}
 }

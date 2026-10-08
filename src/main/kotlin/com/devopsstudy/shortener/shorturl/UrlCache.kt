@@ -34,6 +34,8 @@ class UrlCache(
 	private val warnings = LogThrottle(properties.cacheCooldown, timeSource)
 
 	fun get(code: String): String? {
+		// 시작 시각은 shouldSkip()보다 먼저 잰다. 그래야 이 호출이 건너뛸지 정하는 사이에 난 실패가 연 창을 이 호출의 늦은 성공이 닫지 못한다
+		val startedAt = cooldown.mark()
 		if (cooldown.shouldSkip()) {
 			skipped.increment()
 			return null
@@ -42,7 +44,7 @@ class UrlCache(
 			redis.opsForValue().get(key(code))
 				.also {
 					if (it == null) misses.increment() else hits.increment()
-					cooldown.onSuccess()
+					cooldown.onSuccess(startedAt)
 				}
 		} catch (e: DataAccessException) {
 			fail(code, e, "redis get failed, falling back to db")
@@ -51,10 +53,11 @@ class UrlCache(
 	}
 
 	fun put(code: String, originalUrl: String) {
+		val startedAt = cooldown.mark()
 		if (cooldown.shouldSkip()) return
 		try {
 			redis.opsForValue().set(key(code), originalUrl, properties.cacheTtl)
-			cooldown.onSuccess()
+			cooldown.onSuccess(startedAt)
 		} catch (e: DataAccessException) {
 			fail(code, e, "redis put failed")
 		}
