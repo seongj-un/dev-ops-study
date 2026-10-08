@@ -89,8 +89,10 @@ class CooldownTest {
 		cooldown.onSuccess(startedAt)
 
 		assertTrue(cooldown.shouldSkip(), "창은 그대로 열려 있다")
-		time += 9.seconds + 799.milliseconds
+		time += 9.seconds + 899.milliseconds
 		assertTrue(cooldown.shouldSkip(), "실패한 때부터 10초가 되기 1ms 전")
+		time += 1.milliseconds
+		assertFalse(cooldown.shouldSkip(), "10초가 되면 시험 호출")
 	}
 
 	@Test

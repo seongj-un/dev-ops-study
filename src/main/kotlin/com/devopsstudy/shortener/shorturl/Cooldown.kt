@@ -28,7 +28,10 @@ internal class Cooldown(duration: Duration, timeSource: TimeSource) {
 
 	private fun now() = origin.elapsedNow().inWholeNanoseconds
 
-	/** Redis를 부르기 직전에 시각을 잰다. 이 값을 onSuccess에 넘긴다. */
+	/**
+	 * 시각을 잰다. 이 값을 onSuccess에 넘긴다. 반드시 shouldSkip()보다 먼저 불러야 한다.
+	 * shouldSkip() 뒤에 재면, 그 사이에 다른 호출이 실패해 창을 열었을 때 이 호출의 시작 시각이 열린 시각보다 늦어져서 창을 일찍 닫을 수 있다.
+	 */
 	fun mark(): Long = now()
 
 	/** true면 부르지 말고 건너뛴다. 창이 막 끝났으면 물어본 쪽 하나만 false(시험 호출)를 받는다. */
