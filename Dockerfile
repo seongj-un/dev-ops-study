@@ -19,7 +19,7 @@
 # 이 옵션이 없으면 이 스테이지도 타깃 플랫폼마다 한 번씩 돈다. 그러면 빌더와 CPU가 다른 타깃(amd64 러너에서 arm64 이미지를 만드는 경우)의 Gradle 빌드 전체가
 # QEMU 에뮬레이션 위에서 돌아서, 같은 jar를 두 번 만들 뿐 아니라 몇 배나 느려진다.
 # 다만 "jar가 플랫폼과 무관하다"는 전제는 의존성이 CPU별 네이티브 라이브러리를 담지 않을 때만 맞다(지금은 없다). 그런 의존성을 추가하면 이 스테이지를 다시 따져 봐야 한다.
-FROM --platform=$BUILDPLATFORM eclipse-temurin:25.0.4.1_1-jdk-noble@sha256:f6366ccac38ceae180280ad7012d18a15e8031548a430dc2bae06631d9e88ed0 AS build
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25.0.4.1_1-jdk-noble@sha256:589ff4cc3f71aab462e7048a47a0d10edf57fbccde3fceea2281e610bf5880b4 AS build
 
 WORKDIR /app
 
@@ -57,7 +57,7 @@ RUN java -Djarmode=tools -jar build/libs/app.jar extract --layers --destination 
 # 실행에는 JRE만 있으면 된다. JRE 이미지에는 javac, jar 같은 개발 도구가 없어서 JDK 이미지보다 작고 공격 표면도 작다. 고정 방식(태그@digest)은 위와 같다.
 # 이 스테이지에는 --platform을 주지 않는다. 그래서 타깃 플랫폼마다 그 CPU용 JRE 이미지 위에 따로 만들어지고, 그것이 그 플랫폼의 최종 이미지가 된다.
 # (위 빌드 스테이지가 만든 jar와 달리) JVM과 OS 라이브러리는 이미지가 실행될 CPU에 맞는 네이티브 바이너리여야 하기 때문이다.
-FROM eclipse-temurin:25.0.4.1_1-jre-noble@sha256:693fdaf83831eeeefd9709eae44c8b8706622652f972cf5903bd0e481bbf6ad3 AS runtime
+FROM eclipse-temurin:25.0.4.1_1-jre-noble@sha256:d9a39a23634650173f1e2bbc176227af9728587ecf0f4b62d53e9355cd7a19ab AS runtime
 
 # 임시 조치: 베이스 이미지의 libssl3t64·openssl이 3.0.13-0ubuntu3.15라서, 이대로면 CI의 Trivy 게이트가 HIGH CVE-2026-84782(3.0.13-0ubuntu3.16에서 수정)로 실패한다.
 # 위 digest의 이미지는 Ubuntu가 수정판을 내기 전에 빌드됐고 업스트림이 아직 다시 빌드하지 않아서, digest를 올려서는 고칠 수 없다. 그래서 이 두 패키지만 Ubuntu 보안 업데이트로 올린다(--only-upgrade는 이미 깔린 패키지만 올리고, apt 목록은 같은 RUN에서 지워야 레이어에 남지 않는다).
